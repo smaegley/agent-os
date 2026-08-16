@@ -28,7 +28,10 @@ KEYDIR="${AGENT_KEYDIR:-/home/steve/.config/ops/agent-keys}"
 SUBSTRATE="${AGENT_OS:-/home/steve/maegley-lab/agent-os}"
 STATE="${PROGRAM_REPO:-/home/steve/maegley-lab/program}"
 
-[ -r "$KEYDIR/$AGENT" ] || { echo "no prod key: $KEYDIR/$AGENT" >&2; exit 1; }
+# Theresa (BA) and Andrea (UAT) have no prod key BY DESIGN — see AGENTS.md.
+# A missing key is a valid configuration for those roles, not an error.
+PROD_ACCESS=1
+[ -r "$KEYDIR/$AGENT" ] || { PROD_ACCESS=0; echo "   note: no prod key for $AGENT — provisioning without prod access"; }
 
 echo "→ provisioning runtime for $AGENT"
 
@@ -38,8 +41,10 @@ sudo chmod 750 "/home/$AGENT"                 # not world-readable
 sudo install -d -m 700 -o "$AGENT" -g "$AGENT" "/home/$AGENT/.ssh"
 
 # --- keys: one per trust domain, never shared -------------------------------
-sudo install -m 600 -o "$AGENT" -g "$AGENT" "$KEYDIR/$AGENT"     "/home/$AGENT/.ssh/id_ed25519"
-sudo install -m 644 -o "$AGENT" -g "$AGENT" "$KEYDIR/$AGENT.pub" "/home/$AGENT/.ssh/id_ed25519.pub"
+if [ "$PROD_ACCESS" = 1 ]; then
+  sudo install -m 600 -o "$AGENT" -g "$AGENT" "$KEYDIR/$AGENT"     "/home/$AGENT/.ssh/id_ed25519"
+  sudo install -m 644 -o "$AGENT" -g "$AGENT" "$KEYDIR/$AGENT.pub" "/home/$AGENT/.ssh/id_ed25519.pub"
+fi
 sudo -u "$AGENT" test -f "/home/$AGENT/.ssh/github_$AGENT" || \
   sudo -u "$AGENT" ssh-keygen -t ed25519 -f "/home/$AGENT/.ssh/github_$AGENT" -N "" -q \
        -C "$AGENT@maegley-lab (repo write)"
