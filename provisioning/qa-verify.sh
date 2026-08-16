@@ -75,12 +75,21 @@ case "$CMD" in
   freshness)
     # Guards against silent success — a job that runs clean having processed nothing,
     # or a value frozen at something plausible. Timestamps, never contents.
-    for p in $QA_PATHS; do
-      if [ -e "$p" ]; then
-        printf '%-46s mtime=%s age=%sh\n' "$p" "$(date -r "$p" '+%Y-%m-%d %H:%M')" \
-          "$(( ( $(date +%s) - $(date -r "$p" +%s) ) / 3600 ))"
+    #
+    # Entries are path:max_age_hours. Returning a VERDICT rather than a raw number
+    # matters: an agent should not have to know that 18h is healthy for a nightly
+    # snapshot but 48h means backups have been silently failing for a day.
+    for entry in $QA_PATHS; do
+      p="${entry%%:*}"; maxh="${entry##*:}"
+      [ "$maxh" = "$p" ] && maxh=""          # no threshold given → report only
+      if [ ! -e "$p" ]; then printf '%-42s MISSING\n' "$p"; continue; fi
+      age=$(( ( $(date +%s) - $(date -r "$p" +%s) ) / 3600 ))
+      if [ -n "$maxh" ] && [ "$age" -gt "$maxh" ]; then
+        printf '%-42s age=%sh  STALE (expected < %sh)\n' "$p" "$age" "$maxh"
+      elif [ -n "$maxh" ]; then
+        printf '%-42s age=%sh  ok (< %sh)\n' "$p" "$age" "$maxh"
       else
-        printf '%-46s MISSING\n' "$p"
+        printf '%-42s age=%sh\n' "$p" "$age"
       fi
     done
     ;;
