@@ -22,6 +22,10 @@ LOGDIR="${MAEGLEY_PROGRAM_LOG:-$HOME/maegley-lab/program/log}"
 PATTERNS=(
   'private key|-----BEGIN [A-Z ]*PRIVATE KEY-----'
   'JWT / HA long-lived token|eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}'
+  # A JWT concatenated across source lines is invisible to a line-based scan. Its first
+  # fragment still begins `eyJ`, so match a quoted fragment on its own. Found two hardcoded
+  # HA tokens in bin/*.py that the header.payload pattern above walked straight past.
+  'JWT fragment (split literal)|["'"'"']eyJ[A-Za-z0-9_-]{16,}'
   'Proxmox API token|PVEAPIToken=[^ ]+![^ ]+=[0-9a-f-]{16,}'
   'GitHub token|gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{20,}'
   'AWS access key|AKIA[0-9A-Z]{16}'
