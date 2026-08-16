@@ -85,6 +85,16 @@ while read -r pct mnt; do
     ESCALATIONS+="  codex-ops ${mnt} is ${pct}% full — agents, Slack and this sweep all fail at 100%"$'\n'
 done < <(df -P / /home 2>/dev/null | awk 'NR>1 {gsub(/%/,"",$5); print $5, $6}' | sort -u)
 
+# --- 5. the org's own invariants ---------------------------------------------
+# Every protection built here was correct and, six separate times, was not
+# reaching where the work happened. Each was found by accident. Asserting them
+# daily is the difference between a boundary that holds and one that is merely
+# believed to hold.
+if ! DOC="$("$(dirname "$0")/doctor.sh" 2>&1)"; then
+  FACTS+="DOCTOR: invariant failures"$'\n'
+  ESCALATIONS+="$(printf '%s' "$DOC" | sed -n '/^FAILURES:/,$p' | tail -n +2)"$'\n'
+fi
+
 # --- nothing to say → say nothing -------------------------------------------
 if [ -z "$FACTS" ] && [ -z "$ESCALATIONS" ]; then
   echo "$HEAD_SHA" > "$STATE"
