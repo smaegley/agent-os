@@ -76,7 +76,7 @@ for repo in agent-os program; do
   src="$SUBSTRATE"; [ "$repo" = program ] && src="$STATE"
   if [ ! -d "/home/$AGENT/work/$repo" ]; then
     git clone -q "$src" "/tmp/_seed_$repo"
-    sudo cp -r "/tmp/_seed_$repo" "/home/$AGENT/work/$repo"
+    sudo cp -rT "/tmp/_seed_$repo" "/home/$AGENT/work/$repo"
     sudo chown -R "$AGENT:$AGENT" "/home/$AGENT/work/$repo"
     rm -rf "/tmp/_seed_$repo"
     sudo -u "$AGENT" git -C "/home/$AGENT/work/$repo" \
@@ -103,8 +103,10 @@ s['permissions'] = {
         f"Write(//home/{agent}/work/program/**)",
         f"Edit(//home/{agent}/work/program/**)",
         f"Bash(/home/{agent}/bin/prod *)",
-        "Bash(git add *)", "Bash(git commit *)", "Bash(git push *)",
-        "Bash(git status*)", "Bash(git diff*)", "Bash(git log*)",
+        # Not per-subcommand: `git -C <dir> <sub>` does not match `git add *`,
+        # and agents working across two repos use -C constantly. Real reach is
+        # bounded by filesystem permissions and deploy keys, not by this pattern.
+        "Bash(git *)",
     ],
     "deny": [
         "Bash(sudo *)",

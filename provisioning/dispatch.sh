@@ -29,6 +29,7 @@ set -uo pipefail
 
 REPO="${PROGRAM_REPO:-/home/steve/maegley-lab/program}"
 MAX_DISPATCH="${MAX_DISPATCH:-2}"
+AGENT_TIMEOUT="${AGENT_TIMEOUT:-1800}"   # code work needs far longer than doc work
 DRY_RUN="${DRY_RUN:-0}"
 cd "$REPO" || { echo "dispatch: no repo at $REPO" >&2; exit 1; }
 
@@ -42,7 +43,11 @@ route() {
     new)            echo theresa ;;                       # BA writes the spec
     spec-ready)     [ "$2" = true ] && echo john || echo randal ;;
     design-ready)   echo randal ;;
-    built)          echo eric ;;                          # QA verifies — different access than the builder
+    # 'qa-ready' is the agents' own token, not mine. They had no published state
+    # vocabulary, so they coined one and used it consistently — Randal even noted
+    # "states are convention tokens" in his handoff. Their word wins: it is the one
+    # actually written into the work items. 'built' kept as an accepted synonym.
+    qa-ready|built) echo eric ;;                          # QA verifies — different access than the builder
     qa-passed)      [ "$3" = true ] && echo andrea || echo "" ;;
     uat-passed)     echo "" ;;                            # → Steve approves deploy
     *)              echo "" ;;
@@ -96,22 +101,40 @@ for f in projects/*/*.md; do
   [ "$DRY_RUN" = "1" ] && continue
 
   sudo -u "$who" bash -lc "cd /home/$who/work/program && git pull -q origin main 2>/dev/null; \
-    timeout 600 claude -p \"You are ${who^}. Work item ${id} is in state '${state}' and routed to you.
+    timeout "$AGENT_TIMEOUT" claude -p \"You are ${who^}. Work item ${id} is in state '${state}' and routed to you.
 
-Read ${f} in full, then do YOUR role's part of it — no more. Follow the skills you have
+Read ${f} in full, then do YOUR role's part of it — no more.
+
+Project CODE lives in sibling clones under /home/${who}/work/ (e.g. ~/work/ha-ops), not in
+the program repo — program holds specs, decisions, and status. The work item names the code it
+concerns; if you need a repo you do not have, set state to 'blocked' saying which, and stop. Follow the skills you have
 (spec-template if you are writing a spec, definition-of-done before claiming anything complete).
 
-When done:
-  1. Update the item's front-matter 'state:' to the next state, and set 'owner:'.
-  2. Record what you did in the item itself, or in the project's qa/ or decisions/ directory
-     as your role dictates.
-  3. git add, commit, push.
+When done, IN THIS ORDER — the order matters, an interrupted run must never leave the state
+claiming work that is not committed:
+  1. Commit AND PUSH your actual artifact first (code, spec, ADR, evidence) in whichever repo
+     it belongs to.
+  2. Only then update the item's front-matter 'state:' and 'owner:' in the program repo.
+  3. Commit AND PUSH that. Verify with 'git status -sb' that nothing is ahead or dirty in any
+     repo you touched — unpushed work is invisible to everyone else and will be re-dispatched.
 
 If you cannot complete it, set state to 'blocked', say why in the item, commit, and stop.
 Do not route it onward yourself and do not do another role's work.\" < /dev/null" \
     >> "$REPO/log/dispatch.log" 2>&1 &
 done
 wait
+
+# An exit code is not evidence of work done. A run killed mid-sequence leaves
+# commits unpushed and files uncommitted, and reports success — which is exactly
+# how WR-001 came to sit at qa-ready locally with its code uncommitted elsewhere.
+for who in $(echo "$ROUTED" | grep -oE '→ [a-z]+' | cut -d' ' -f2 | sort -u); do
+  for r in program ha-ops agent-os; do
+    d="/home/$who/work/$r"; sudo -n test -d "$d/.git" || continue
+    dirty=$(sudo -n -u "$who" git -C "$d" status --porcelain 2>/dev/null | head -3)
+    ahead=$(sudo -n -u "$who" git -C "$d" status -sb 2>/dev/null | grep -o 'ahead [0-9]*')
+    [ -n "$dirty$ahead" ] && STOPPED+="  $who: $r left ${ahead:-dirty} — work not visible to others"$'\n'
+  done
+done
 
 SUMMARY=""
 [ -n "$BLOCKED" ]       && SUMMARY+="BLOCKED:"$'\n'"$BLOCKED"

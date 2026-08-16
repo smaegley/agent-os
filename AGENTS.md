@@ -56,3 +56,22 @@ expected to honor, not a wall that stops them.
 3. Provision the credential — a role without its own credential is a label, not an identity.
 4. Record why the role exists in an ADR. Roles that only reformat other agents' output are
    negative value; the bar is a distinct tool scope or a distinct model need.
+
+## Work item states
+
+The dispatcher routes on these tokens. They were **not** published when the first work items
+ran, so the agents coined their own and used them consistently — this table now records what
+they chose rather than overriding it.
+
+| State | Routes to | Meaning |
+|---|---|---|
+| `new` | Theresa | needs requirements before anyone builds |
+| `spec-ready` | John if `infra: true`, else Randal | spec exists |
+| `design-ready` | Randal | design decision recorded as an ADR |
+| `qa-ready` | Eric | artifact committed, awaiting independent verification |
+| `qa-passed` | Andrea if `user_facing: true`, else stops | verified |
+| `uat-passed` | **stops — Steve** | deploy is never auto-routed |
+| `blocked` | **escalates to Steve** | never handed to an agent |
+
+Set `state` and `owner` in the item's front matter. **Commit the artifact before advancing the
+state** — an interrupted run must never leave a state claiming work that is not committed.
