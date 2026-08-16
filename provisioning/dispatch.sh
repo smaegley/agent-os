@@ -56,6 +56,15 @@ route() {
 
 ROUTED=""; STOPPED=""; BLOCKED=""; UNPROVISIONED=""; n=0
 
+# Snapshot every item's state BEFORE dispatching. The old notification announced
+# what was STARTED — so a run that stranded its work still read as "DISPATCHED
+# WR-001 → randal", i.e. success. Report what actually landed on origin instead.
+declare -A BEFORE
+for f in projects/*/*.md; do
+  [ -e "$f" ] && head -1 "$f" | grep -q '^---$' || continue
+  BEFORE["$f"]="$(fm state "$f")"
+done
+
 for f in projects/*/*.md; do
   [ -e "$f" ] || continue
   head -1 "$f" | grep -q '^---$' || continue          # no front matter → not a work item
@@ -136,9 +145,29 @@ for who in $(echo "$ROUTED" | grep -oE '→ [a-z]+' | cut -d' ' -f2 | sort -u); 
   done
 done
 
+# What actually changed on origin — the only honest report of a run.
+git fetch -q origin 2>/dev/null; git merge -q --ff-only origin/main 2>/dev/null || true
+LANDED=""; NEEDS_STEVE=""
+for f in projects/*/*.md; do
+  [ -e "$f" ] && head -1 "$f" | grep -q '^---$' || continue
+  now="$(fm state "$f")"; was="${BEFORE[$f]:-}"
+  [ "$now" = "$was" ] && continue
+  id="$(fm id "$f")"; who="$(fm owner "$f")"
+  if [ "$now" = blocked ]; then
+    NEEDS_STEVE+="  $id blocked — $(fm project "$f")"$'\n'
+  else
+    LANDED+="  $id  $was → $now  (now $who)"$'\n'
+  fi
+  # An item that stops needing agents starts needing Steve — say so plainly
+  # rather than letting it sit silently in HELD looking parked.
+  case "$now" in
+    qa-passed|uat-passed) NEEDS_STEVE+="  $id is verified and waiting on your deploy approval"$'\n' ;;
+  esac
+done
+
 SUMMARY=""
+[ -n "$LANDED" ]        && SUMMARY+="COMPLETED:"$'\n'"$LANDED"
 [ -n "$BLOCKED" ]       && SUMMARY+="BLOCKED:"$'\n'"$BLOCKED"
-[ -n "$ROUTED" ]        && SUMMARY+="DISPATCHED:"$'\n'"$ROUTED"
 [ -n "$UNPROVISIONED" ] && SUMMARY+="NEEDS AN AGENT:"$'\n'"$UNPROVISIONED"
 [ -n "$STOPPED" ]       && SUMMARY+="HELD:"$'\n'"$STOPPED"
 
@@ -146,8 +175,9 @@ if [ "$DRY_RUN" = "1" ]; then
   echo "=== dispatch plan (nothing invoked) ==="; echo "${SUMMARY:-  nothing to route}"; exit 0
 fi
 
-[ -n "$ROUTED$BLOCKED$UNPROVISIONED" ] || exit 0
-sudo -n /usr/local/bin/notify '#program' "Dispatch — "$'\n'"$SUMMARY" >/dev/null
-[ -n "$BLOCKED$UNPROVISIONED" ] && sudo -n /usr/local/bin/notify '#ops-prod' \
-  "Steve — needs you:"$'\n'"$BLOCKED$UNPROVISIONED" >/dev/null
+# Silence is the default: a run where nothing moved is not news.
+[ -n "$LANDED" ] && sudo -n /usr/local/bin/notify '#program' "$SUMMARY" >/dev/null
+NEEDS_STEVE="$NEEDS_STEVE$BLOCKED$UNPROVISIONED"
+[ -n "$NEEDS_STEVE" ] && sudo -n /usr/local/bin/notify '#ops-prod' \
+  "Needs you:"$'\n'"$NEEDS_STEVE" >/dev/null
 echo "$(date -Iseconds) dispatch: routed=$n" >> "$REPO/log/dispatch.log"
