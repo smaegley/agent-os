@@ -116,12 +116,22 @@ p.parent.mkdir(parents=True, exist_ok=True)
 p.write_text(json.dumps(s, indent=2))
 PY
 
+# --- secret gate in the agent's OWN clone ------------------------------------
+# Installing it only in Todd's repos left every agent committing unscanned —
+# the protection existed but not where the commits happen. Point the hook at
+# the agent's own copy of the scanner; it cannot read Todd's.
+sudo -u "$AGENT" bash -lc \
+  "/home/$AGENT/work/agent-os/plugins/maegley-core/hooks/install-git-hooks.sh /home/$AGENT/work/program" \
+  >/dev/null 2>&1 || echo "   ! secret gate install failed for $AGENT"
+
 # --- verify the boundary, don't assume it -----------------------------------
 echo "   verifying:"
 sudo -u "$AGENT" ls /home/steve/.ssh/ >/dev/null 2>&1 \
   && { echo "   FAIL: $AGENT can read Todd's keys"; exit 1; } || echo "     ✓ cannot read ops keys"
 sudo -u "$AGENT" sudo -n true >/dev/null 2>&1 \
   && { echo "   FAIL: $AGENT has sudo"; exit 1; } || echo "     ✓ no sudo"
+sudo -u "$AGENT" test -f "/home/$AGENT/work/program/.git/hooks/pre-commit" \
+  && echo "     ✓ secret gate installed" || echo "   FAIL: no secret gate — commits unscanned"
 sudo -u "$AGENT" "/home/$AGENT/bin/prod" help >/dev/null 2>&1 \
   && echo "     ✓ prod wrapper reaches host" || echo "     ! prod wrapper failed (run install-agent-key.sh on $PROD_HOST first)"
 
