@@ -79,8 +79,18 @@ for repo in agent-os program; do
     sudo cp -rT "/tmp/_seed_$repo" "/home/$AGENT/work/$repo"
     sudo chown -R "$AGENT:$AGENT" "/home/$AGENT/work/$repo"
     rm -rf "/tmp/_seed_$repo"
-    sudo -u "$AGENT" git -C "/home/$AGENT/work/$repo" \
-         remote set-url origin "git@github.com:smaegley/$repo.git"
+    if [ "$repo" = agent-os ]; then
+      # Agents pull the substrate from a local bare mirror, not GitHub. Deploy
+      # keys are per-repo and agents hold one for `program`; minting a second
+      # read-only key per agent just to receive skill updates is pure overhead.
+      # Without this the clone is frozen at provisioning time and the agent runs
+      # whatever skills existed that day — which is exactly what happened.
+      sudo -u "$AGENT" git -C "/home/$AGENT/work/$repo" remote set-url origin /opt/agent-os.git
+      sudo -u "$AGENT" bash -c "cd /tmp && git config --global --add safe.directory /opt/agent-os.git"
+    else
+      sudo -u "$AGENT" git -C "/home/$AGENT/work/$repo" \
+           remote set-url origin "git@github.com:smaegley/$repo.git"
+    fi
   fi
 done
 sudo -u "$AGENT" git -C "/home/$AGENT/work/program" config user.name  "$(tr a-z A-Z <<<"${AGENT:0:1}")${AGENT:1}"
