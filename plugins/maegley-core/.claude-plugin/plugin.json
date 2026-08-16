@@ -1,0 +1,8 @@
+{
+  "name": "maegley-core",
+  "description": "The org itself: agent roster (John, Theresa, Eric, Andrea, Ken), spec and definition-of-done standards, and the secret-scan gate.",
+  "author": {
+    "name": "Steve Maegley",
+    "email": "steve@maegley.com"
+  }
+}
