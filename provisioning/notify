@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# notify <channel> <message...>  — post to Slack as the invoking agent.
+#
+# Installed root-owned at /usr/local/bin/notify and invoked by agents via a
+# narrow sudoers rule. The Slack bot token lives in /etc/maegley/slack-token
+# (root:root 0600) and is never readable by an agent — the same shape as the
+# prod wrapper, where the agent holds nothing and the boundary is enforced
+# outside it.
+#
+# Identity comes from SUDO_USER, not from an argument, so an agent cannot post
+# as another agent. That is the whole reason this runs through sudo rather than
+# handing each agent the token.
+#
+# Chat is the doorbell, not the record: post a pointer to a git artifact.
+# Never paste specs, evidence, or credentials into a message.
+
+set -euo pipefail
+
+TOKEN_FILE=/etc/maegley/slack-token
+CHANNEL="${1:?usage: notify <channel> <message...>}"; shift
+MESSAGE="$*"
+[ -n "$MESSAGE" ] || { echo "notify: empty message" >&2; exit 64; }
+
+# Identity is the invoking user. Refuse to guess if sudo did not set it.
+AGENT="${SUDO_USER:-}"
+[ -n "$AGENT" ] || { echo "notify: no SUDO_USER; run via sudo" >&2; exit 64; }
+
+case "$AGENT" in
+  eric)    NAME="Eric";    ICON=":mag:"          ;;  # QA
+  john)    NAME="John";    ICON=":triangular_ruler:" ;;  # Architect
+  theresa) NAME="Theresa"; ICON=":memo:"         ;;  # BA
+  randal)  NAME="Randal";  ICON=":hammer_and_wrench:" ;;  # DEV
+  andrea)  NAME="Andrea";  ICON=":eyes:"         ;;  # UAT
+  ken)     NAME="Ken";     ICON=":electric_plug:" ;;  # Hardware
+  steve|root) NAME="Todd"; ICON=":gear:"         ;;  # Ops
+  *) echo "notify: '$AGENT' is not a registered agent (see AGENTS.md)" >&2; exit 77 ;;
+esac
+
+# Channel allowlist — an agent must not invent channels or DM the workspace.
+case "$CHANNEL" in
+  \#program|\#ops-prod|\#proj-*) ;;
+  *) echo "notify: channel '$CHANNEL' not permitted" >&2; exit 77 ;;
+esac
+
+[ -r "$TOKEN_FILE" ] || { echo "notify: no token at $TOKEN_FILE" >&2; exit 78; }
+TOKEN="$(< "$TOKEN_FILE")"
+
+# --fail-with-body so a Slack-level error surfaces instead of exiting 0 with an
+# {"ok":false} body — a poster that silently succeeds while posting nothing is
+# the same failure class as a QA tool that reports clean when it cannot see.
+resp=$(curl -sS --max-time 15 -X POST https://slack.com/api/chat.postMessage \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json; charset=utf-8' \
+  --data @<(python3 -c '
+import json,sys
+print(json.dumps({"channel":sys.argv[1],"text":sys.argv[2],
+                  "username":sys.argv[3],"icon_emoji":sys.argv[4]}))' \
+  "$CHANNEL" "$MESSAGE" "$NAME" "$ICON"))
+unset TOKEN
+
+if python3 -c 'import json,sys; sys.exit(0 if json.loads(sys.argv[1]).get("ok") else 1)' "$resp"; then
+  echo "posted to $CHANNEL as $NAME"
+else
+  err=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("error","unknown"))' "$resp")
+  echo "notify: slack rejected the post: $err" >&2
+  exit 1
+fi
