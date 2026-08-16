@@ -27,7 +27,11 @@ PATTERNS=(
   'AWS access key|AKIA[0-9A-Z]{16}'
   'Slack token|xox[baprs]-[A-Za-z0-9-]{10,}'
   'Backblaze B2 key|applicationKey["'"'"']?\s*[:=]\s*[A-Za-z0-9+/]{25,}'
-  'assigned credential|(password|passwd|secret|api[_-]?key|apikey|auth[_-]?token)["'"'"']?\s*[:=]\s*["'"'"']?[^\s"'"'"'<${}]{8,}'
+  # Between the label and the value there may be markdown noise (`**`, backticks, quotes) —
+  # skip it, then require 8+ value chars. `$` is allowed *inside* the value: excluding it to
+  # dodge ${VAR} interpolation silently missed a real root password beginning with `$`.
+  # Interpolation is handled by IGNORE instead.
+  "assigned credential|(password|passwd|secret|api[_-]?key|apikey|auth[_-]?token)[[:space:]]*[:=][[:space:]*\`\"']*[^[:space:]\"'\`<>{}]{8,}"
 )
 
 # Placeholders — these are documentation, not leaks.
