@@ -69,6 +69,7 @@ they chose rather than overriding it.
 | `spec-ready` | John if `infra: true`, else Randal | spec exists |
 | `design-ready` | Randal | design decision recorded as an ADR |
 | `qa-ready` | Eric | artifact committed, awaiting independent verification |
+| `needs-exec` | **stops — Steve** | QA wrote a run request; commands must be executed by the operator |
 | `qa-passed` | Andrea if `user_facing: true`, else stops | verified |
 | `uat-passed` | **stops — Steve** | deploy is never auto-routed |
 | `blocked` | **escalates to Steve** | never handed to an agent |

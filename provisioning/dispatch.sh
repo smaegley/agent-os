@@ -48,6 +48,11 @@ route() {
     # "states are convention tokens" in his handoff. Their word wins: it is the one
     # actually written into the work items. 'built' kept as an accepted synonym.
     qa-ready|built) echo eric ;;                          # QA verifies — different access than the builder
+    # QA is read-only by design, but some acceptance criteria can only be checked
+    # by RUNNING the thing against prod. Rather than widen Eric's access or let him
+    # infer a verdict from source, he writes the exact commands and Todd executes
+    # them — Eric still never built it and still never guesses. Stops for Steve.
+    needs-exec)     echo "" ;;
     qa-passed)      [ "$3" = true ] && echo andrea || echo "" ;;
     uat-passed)     echo "" ;;                            # → Steve approves deploy
     *)              echo "" ;;
@@ -162,6 +167,7 @@ for f in projects/*/*.md; do
   # rather than letting it sit silently in HELD looking parked.
   case "$now" in
     qa-passed|uat-passed) NEEDS_STEVE+="  $id is verified and waiting on your deploy approval"$'\n' ;;
+    needs-exec)           NEEDS_STEVE+="  $id — Eric needs commands run he cannot run himself; see the item's qa/ run request"$'\n' ;;
   esac
 done
 

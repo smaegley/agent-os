@@ -63,3 +63,28 @@ is fine. Partial completion is reported as partial — say exactly what is done 
 
 Perfection, or every possible improvement. Done means "meets the spec, verified." Improvements
 beyond scope go in the backlog, not into a widening deliverable.
+
+## When verification requires running something QA cannot run
+
+Some acceptance criteria can only be checked by executing against production — and QA is
+read-only on purpose. Do not resolve that by widening QA's access, and never resolve it by
+reading the source and inferring what a run would do. Inspection and execution are different
+kinds of evidence and must not be substituted for one another.
+
+Instead, **QA directs and the operator executes**:
+
+1. Verify by inspection everything that inspection can settle, and record those verdicts.
+2. For the rest, write a run request to `projects/<project>/qa/<date>-<item>-run-request.md`:
+   the **exact commands**, the working directory, and — stated in advance — what output would
+   constitute a pass and what would constitute a fail.
+3. Set the item's state to `needs-exec`. It escalates to Steve; no agent is dispatched.
+4. Todd runs the commands verbatim and commits the **raw, unedited** output alongside as
+   `<date>-<item>-run-output.md`.
+5. QA reads that output and issues the verdict, then returns the item to `qa-ready` → verdict.
+
+QA's independence is preserved: it did not build the thing and did not guess. The operator's
+role is mechanical — run exactly what was asked and publish exactly what came back. An operator
+who edits, summarises, or omits output has destroyed the evidence.
+
+Deciding the pass/fail condition **before** seeing the output is the point. It is what stops a
+disappointing result from being reinterpreted as a pass after the fact.
