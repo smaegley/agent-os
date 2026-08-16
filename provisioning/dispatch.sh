@@ -178,7 +178,15 @@ SUMMARY=""
 [ -n "$STOPPED" ]       && SUMMARY+="HELD:"$'\n'"$STOPPED"
 
 if [ "$DRY_RUN" = "1" ]; then
-  echo "=== dispatch plan (nothing invoked) ==="; echo "${SUMMARY:-  nothing to route}"; exit 0
+  # A PLAN reports intent; a RUN reports outcome. Swapping the live summary to
+  # outcomes correctly stopped "DISPATCHED" from reading as success — but it also
+  # emptied the dry run, which exists precisely to show what WOULD be dispatched.
+  PLAN=""
+  [ -n "$ROUTED" ]        && PLAN+="WOULD DISPATCH:"$'\n'"$ROUTED"
+  [ -n "$BLOCKED" ]       && PLAN+="BLOCKED:"$'\n'"$BLOCKED"
+  [ -n "$UNPROVISIONED" ] && PLAN+="NEEDS AN AGENT:"$'\n'"$UNPROVISIONED"
+  [ -n "$STOPPED" ]       && PLAN+="HELD:"$'\n'"$STOPPED"
+  echo "=== dispatch plan (nothing invoked) ==="; echo "${PLAN:-  nothing to route}"; exit 0
 fi
 
 # Silence is the default: a run where nothing moved is not news.
