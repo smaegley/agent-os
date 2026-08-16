@@ -73,6 +73,18 @@ for f in $(grep -rl "unassigned" projects/ --include="*.md" 2>/dev/null | grep -
     FACTS+="UNASSIGNED ${d}d: $f"$'\n'
 done
 
+# --- 4. the box the agents run on --------------------------------------------
+# Added 2026-08-16 after LXC 301 hit 100% and wedged every agent, the Slack
+# wrapper, and this sweep. A platform that cannot notice its own filesystem
+# filling is missing something basic. Deterministic — df, not judgement.
+DISK_WARN=80; DISK_ESCALATE=90
+while read -r pct mnt; do
+  [ "$pct" -ge "$DISK_WARN" ] || continue
+  FACTS+="DISK ${pct}% used on ${mnt} (codex-ops)"$'\n'
+  [ "$pct" -ge "$DISK_ESCALATE" ] && \
+    ESCALATIONS+="  codex-ops ${mnt} is ${pct}% full — agents, Slack and this sweep all fail at 100%"$'\n'
+done < <(df -P / /home 2>/dev/null | awk 'NR>1 {gsub(/%/,"",$5); print $5, $6}' | sort -u)
+
 # --- nothing to say → say nothing -------------------------------------------
 if [ -z "$FACTS" ] && [ -z "$ESCALATIONS" ]; then
   echo "$HEAD_SHA" > "$STATE"
