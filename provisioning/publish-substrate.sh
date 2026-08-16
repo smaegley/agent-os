@@ -12,7 +12,7 @@ chmod -R a+rX /opt/agent-os.git
 echo "→ substrate published: $(git -C /opt/agent-os.git rev-parse --short HEAD)"
 for a in eric john theresa ken randal andrea; do
   id "$a" >/dev/null 2>&1 || continue
-  [ -d "/home/$a/work/agent-os" ] || continue
+  sudo -n test -d "/home/$a/work/agent-os" || continue
   sudo -u "$a" bash -c "cd /home/$a/work/agent-os && git fetch -q origin && git reset -q --hard origin/main"
   printf '   %-8s %s\n' "$a" "$(sudo -u "$a" bash -c "cd /home/$a/work/agent-os && git rev-parse --short HEAD")"
 done
