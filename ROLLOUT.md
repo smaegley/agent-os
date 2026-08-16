@@ -204,9 +204,21 @@ Each step is independently useful. Nothing here runs without Steve's go-ahead.
    config; a denylist leaks on the first new file.
 2. ~~Install `gh` from GitHub's official apt repo~~ — **DONE**, 2.97.0. (Ubuntu repo ships 2.4.0,
    too old for current auth flows.)
-3. Create private repos `agent-os` and `program` under `github.com/smaegley`. Push initial
-   structure. — **BLOCKED**: `gh auth login` is interactive and cannot run from this session.
-   Steve must authenticate once.
+3. ~~Create private repos `agent-os` and `program` under `github.com/smaegley`~~ — **DONE
+   2026-08-16.** Both private, verified by unauthenticated request (HTTP 404 to an anonymous
+   caller is the only proof that doesn't depend on our own token).
+
+**Phase A lessons:**
+- `gh auth login` offered to upload `~/.ssh/proxmox_lxc.pub` — the **root key to the Proxmox
+  nodes and every LXC**. The upload failed on a 403, which was luck. One keypair must never span
+  source control and root-on-infrastructure: revoking GitHub would otherwise mean re-keying every
+  host. Dedicated key `~/.ssh/github_todd` created and pinned in `~/.ssh/config` with
+  `IdentitiesOnly yes`.
+- **Fine-grained PATs cannot create repositories** (`gh repo create` → 403) and only see the
+  repos explicitly selected for them. Repos had to be created in the web UI.
+- `program` was created **public** by default and pushed before anyone noticed. No credentials
+  were exposed — the gate was live and found none — but the README disclosed LXC topology for
+  ~10 minutes. **Check visibility before the first push, not after.**
 
 ### Phase A.5 — secret scrub (NEW — discovered during Phase A)
 
@@ -229,12 +241,25 @@ unknown exposure. Recommend rotating all six regardless of whether they ever rea
 Also add a **pre-commit secret scan hook** to `agent-os` so this class of mistake is caught by
 machine rather than by survey. This is the first hook worth writing.
 
-### Phase B — substrate (no infra risk)
-4. Write `CLAUDE.md` (constitution) — largely transcription of rules already in force.
-5. Extract `handoff-format` and `lxc-deploy` skills from existing practice.
-6. Write `spec-template` and `definition-of-done` skills. **Highest-value artifacts here.**
-7. Author the 4 agent definitions with model + tool scope frontmatter.
-8. Package as plugin, publish marketplace, install in one folder, verify pickup.
+### Phase B — substrate (COMPLETE 2026-08-16, commit `fcb2e55`)
+4. ~~Write `CLAUDE.md` (constitution)~~ — **DONE**. Six principles + prod rules + artifact
+   ownership + Slack protocol + escalation.
+5. Extract `handoff-format` and `lxc-deploy` skills from existing practice. — **DEFERRED.**
+   Both are transcription of working practice with no open questions; they cost time without
+   teaching anything. Write them when a project actually needs them.
+6. ~~Write `spec-template` and `definition-of-done` skills~~ — **DONE**. As predicted, the
+   highest-value artifacts here.
+7. ~~Author the agent definitions~~ — **DONE**, five not four: John, Theresa, Eric, Andrea, and
+   **Ken** (Hardware/Firmware), added because the original roster had no owner for the
+   ESPHome/PlatformIO workstream Steve named in his first description of the org.
+8. ~~Package as plugin, publish marketplace, verify pickup~~ — **DONE**. Marketplace validates;
+   `maegley-core` installs at `--scope local` and reports enabled.
+
+**Also delivered:** `hooks/secret-scan.sh`, pulled forward from Phase D because Phase A proved
+it was needed. Verified in both directions — it catches all eight real credentials in the ops
+workspace (two more than the manual survey found) and produces zero false positives against
+clean docs. It also caught a bug in its own first version, which printed a password unredacted;
+a scanner that echoes the secret to the terminal and the log has made the problem worse.
 
 ### Phase C — credentials (needs approval; touches prod)
 9. Generate per-role SSH keys. Extend the `devread` forced-command pattern to a QA key with a
