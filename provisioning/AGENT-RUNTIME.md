@@ -32,18 +32,47 @@ sudo -u <agent> ssh <agent>@<prod> "cat /path/.env"  # must NOT execute
 
 ## Steps
 
-1. `useradd -m -s /bin/bash <agent>`; `chmod 750 /home/<agent>`
-2. Install the prod-read key from `~steve/.config/ops/agent-keys/<agent>` as
-   `~<agent>/.ssh/id_ed25519`
-3. Generate a **separate** GitHub key, `~<agent>/.ssh/github_<agent>`, and pin it in
-   `~<agent>/.ssh/config`. One key per trust domain — the prod key and the repo key must
-   never be the same key.
-4. Provide `work/agent-os` and `work/program`. Ultimately clones from GitHub via the agent's
-   deploy key; a local clone from Todd works to bootstrap.
-5. `claude plugin marketplace add ~<agent>/work/agent-os` then
-   `claude plugin install maegley-core@maegley-lab --scope user`
-6. `claude login` **as that user** — see below.
-7. Set `git config user.name/user.email` in the work repos so commits are attributable.
+Both halves are scripted. Run them in this order:
+
+```bash
+# 1. Target host — user, forced command, key (run from Todd)
+agent-os/provisioning/install-agent-key.sh <agent> root@<prod-host> \
+    agent-os/provisioning/qa-verify.sh
+
+# 2. Runtime host — user, keys, wrapper, workspace, plugin, PERMISSIONS
+agent-os/provisioning/provision-agent-runtime.sh <agent> <prod-host-ip>
+```
+
+Then the two manual steps the scripts print at the end: `claude auth login` as that user,
+and adding the printed deploy key to the `program` repo with **write** access.
+
+## The two gaps that cost the most time
+
+Both were hit provisioning Eric, and both are now handled by
+`provision-agent-runtime.sh` — but understand them, because they recur anywhere an agent
+is given a credential.
+
+**1. A credential the agent is not permitted to invoke is not a credential.** Eric had a
+working key and a working forced command, and every call still failed as *"requires
+approval"* — nothing indicated the permission layer, rather than the credential, was the
+problem. The agent's own `settings.json` must allow the calls. Provisioning is not done
+when the key works; it is done when the agent can use the key.
+
+**2. Permission patterns break on flag drift.** `Bash(ssh <agent>@<host> *)` matches only
+commands beginning with exactly that string. The moment the model adds `-o
+StrictHostKeyChecking=no`, the rule stops matching and the call is blocked — intermittently,
+depending on how the model happens to phrase it that run.
+
+The fix for (2) is the **wrapper**: `~<agent>/bin/prod` hard-codes the host and the ssh
+flags, so the invoked string is stable and a narrow rule matches it exactly. It grants
+nothing extra — the host-side forced command remains the real boundary. This generalizes:
+any outbound capability an agent needs should be a fixed-argument wrapper, not a raw
+command the model composes freshly each time.
+
+The wrapper has a second benefit worth naming. Because the *host* enforces the restriction,
+the client-side permission rule does not have to be clever — which means a narrow,
+auditable rule is sufficient. Client-side permissions are ergonomics; credentials are
+security. Do not confuse the two.
 
 ## The authentication constraint — read this before scaling
 
@@ -61,6 +90,15 @@ Two consequences worth being honest about:
 
 The alternative is `ANTHROPIC_API_KEY` per agent, which is scriptable and gives genuinely
 separate API identities, but bills separately from the subscription. Not currently used.
+
+## Describe tools by pointing at them, not by listing them
+
+Eric's first pass reported that none of its verbs could observe a dirty working tree — an
+inference from the verb names in its prompt. Once told to run `prod help` first, it read the
+actual interface, found that `deployed` does report tree state, and corrected itself.
+
+Give an agent the entry point and let it read `help`. A verb list in a prompt is a copy that
+drifts from the tool the moment the tool changes.
 
 ## Gotchas hit while doing this
 
