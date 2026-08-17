@@ -112,6 +112,16 @@ for f in $ORDERED; do
     UNPROVISIONED+="  $id [$proj] state=$state → $who (NOT PROVISIONED)"$'\n'; continue
   fi
 
+  # An agent that sets owner: john and state: design-ready has contradicted
+  # itself — the state routes to randal. Routing follows state, so the item
+  # lands on the wrong desk and burns a run. Third occurrence; hold instead.
+  declared="$(fm owner "$f")"
+  if [ -n "$declared" ] && [ "$declared" != unassigned ] && [ "$declared" != "$who" ]; then
+    STOPPED+="  $id [$proj] state=$state routes to $who but owner says $declared — contradiction, not dispatched"$'\n'
+    NEEDS_STEVE+="  $id — state '$state' and owner '$declared' disagree; Todd to resolve"$'\n'
+    continue
+  fi
+
   # Agents pull from origin; the dispatcher reads the local working copy. An
   # item that exists only locally dispatches an agent to look for a file that
   # is not there — which is exactly what happened on the first live run.
