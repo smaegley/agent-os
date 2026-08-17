@@ -36,8 +36,22 @@ for f in projects/*/*.md; do
   st="$(fm state "$f")"; proj="$(fm project "$f")"; own="$(fm owner "$f")"
   title="$(grep -m1 '^# ' "$f" | sed 's/^# *//;s/Work request — //' | cut -c1-78)"
   IFS='|' read -r actor mine desc <<<"$(meaning "$st")"
+
+  # Live overrides durable: a running marker means an agent is on it right now.
+  RUNMARK="/home/steve/.local/state/maegley/running.d/$id"
+  if [ -f "$RUNMARK" ]; then
+    read -r r_who r_ts < "$RUNMARK"
+    r_min=$(( ( $(date +%s) - r_ts ) / 60 ))
+    if [ "$r_min" -le 40 ]; then
+      actor="${r_who^}"; mine=0
+      desc="IN PROGRESS — ${r_who^} working now (${r_min}m elapsed)"
+    else
+      desc="$desc (a run started ${r_min}m ago and may have died — Todd should check)"
+    fi
+  fi
   TOTAL=$((TOTAL+1)); [ "$mine" = 1 ] && MINE=$((MINE+1))
   cls=$([ "$mine" = 1 ] && echo "mine" || echo "team")
+  [ -f "$RUNMARK" ] && [ "${r_min:-99}" -le 40 ] && cls="live"
   updated="$(git log -1 --format='%ar' -- "$f" 2>/dev/null)"
 
   # For anything waiting on Steve, pull the actual ask onto the page. A board

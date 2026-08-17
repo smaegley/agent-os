@@ -137,6 +137,8 @@ for f in $ORDERED; do
   # person when they start". I argued completions were enough; he overruled.
   sudo -n /usr/local/bin/notify '#program' \
     "${who^} starting $id ($state → next step)" >/dev/null 2>&1 || true
+  RUNDIR=/home/steve/.local/state/maegley/running.d; mkdir -p "$RUNDIR"
+  printf '%s %s\n' "$who" "$(date +%s)" > "$RUNDIR/$id"
 
   sudo -u "$who" bash -lc "cd /home/$who/work/program && git pull -q origin main 2>/dev/null; \
     timeout "$AGENT_TIMEOUT" claude -p \"You are ${who^}. Work item ${id} is in state '${state}' and routed to you.
@@ -158,7 +160,7 @@ claiming work that is not committed:
 
 If you cannot complete it, set state to 'blocked', say why in the item, commit, and stop.
 Do not route it onward yourself and do not do another role's work.\" < /dev/null" \
-    >> "$REPO/log/dispatch.log" 2>&1 &
+    >> "$REPO/log/dispatch.log" 2>&1 && rm -f "$RUNDIR/$id" || rm -f "$RUNDIR/$id" &
 done
 wait
 

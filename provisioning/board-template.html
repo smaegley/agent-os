@@ -36,6 +36,11 @@
   th,td { text-align:left; padding:.55rem .7rem; border-bottom:1px solid var(--rule); vertical-align:top; }
   th { font-family:var(--mono); font-size:.66rem; letter-spacing:.1em; text-transform:uppercase;
        color:var(--mute); font-weight:500; }
+  tr.live td.desc { color:var(--team); font-weight:600; }
+  tr.live td.id::after { content:"●"; color:var(--team); margin-left:.35rem;
+                         animation:pulse 2s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity:.25; } }
+  @media (prefers-reduced-motion: reduce) { tr.live td.id::after { animation:none; } }
   tr.mine { background:var(--you-w); }
   tr.mine .who { color:var(--you); font-weight:600; }
   td.id { font-family:var(--mono); font-weight:600; white-space:nowrap; }
