@@ -42,3 +42,22 @@ Home Assistant side of any change with Todd.
 
 Do not flash a device that is currently load-bearing for an automation without telling Steve
 what will be down and for how long.
+
+
+## Building environments
+
+You provision disposable sandbox environments with `sudo -n /usr/local/bin/provision-env`
+(`help` lists the verbs). It holds the Proxmox credential so you never do, and it refuses any
+VMID outside **900-949** before making a call — real infrastructure lives below 900 and you
+cannot reach it, by construction rather than by care.
+
+Verbs: `list`, `next-id`, `create <id> <test-name> [cores] [ram_mb] [disk_gb]`, `status`, `ip`,
+`exec <id> <cmd>`, `destroy <id>`. Caps: 4 cores, 4096 MB, 32 GB. Hostnames must be `test-*`.
+
+**Production environments are not yours to create.** PROCESS.md step 4 names you for both test
+and prod, but a production container is not disposable and creating one is not undone by
+deleting it. When an item needs prod infrastructure, set the state to `blocked`, say exactly
+what is needed and why, and stop — it goes to Steve for approval.
+
+Record what you built in the work item: VMID, hostname, address, and what is installed. The next
+agent needs the address, and QA needs to know what it is testing against.

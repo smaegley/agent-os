@@ -1,0 +1,139 @@
+#!/usr/bin/env bash
+# provision-env <verb> [args]  — sandbox LXC lifecycle for Ken (Hardware/Env).
+#
+# WHY THIS EXISTS: PROCESS.md step 4 says Ken builds the test and prod
+# environments. Ken cannot hold the Proxmox root key to do it — that key reaches
+# every node, every VM, and every container including production Home Assistant.
+# So the credential stays with root here and Ken gets verbs, exactly like
+# `notify` holds the Slack token and `qa-verify` holds QA's prod access.
+#
+# THE BOUNDARY IS THE VMID RANGE. Everything below refuses outside 900-949:
+# create, destroy, exec, status. Real infrastructure lives at 106-301, so no
+# argument, typo, or prompt injection can reach it — the check is numeric and
+# happens before any Proxmox call. A sandbox container is disposable by
+# construction; that is what makes it safe to let an agent create one unattended.
+#
+# NOT IN SCOPE, DELIBERATELY: creating anything in production. Step 4's "prod
+# environment" half stops for Steve, because a production container is not
+# disposable and its creation is not reversible by deleting it.
+#
+# Storage is DataZFS, not local-lvm: NUC1B's thin pool is overprovisioned (that
+# is WR-002's whole subject) and sandbox churn should not be pushing on it.
+
+set -uo pipefail
+
+KEY=/root/.ssh/proxmox_lxc
+NODE=10.0.1.127                 # NUC1B
+STORAGE=DataZFS
+TEMPLATE='local:vztmpl/debian-12-standard_12.12-1_amd64.tar.zst'
+MIN_ID=900; MAX_ID=949
+LOG=/var/log/maegley-provision.log
+
+AGENT="${SUDO_USER:-unknown}"
+case "$AGENT" in
+  ken|steve|root) ;;
+  *) echo "provision-env: '$AGENT' is not permitted to provision environments" >&2; exit 77 ;;
+esac
+
+VERB="${1:-help}"; shift || true
+
+px() { ssh -i "$KEY" -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new \
+         "root@$NODE" "$@"; }
+
+# Every id-taking verb passes through here. Numeric, absolute, before any call.
+check_id() {
+  local id="$1"
+  [[ "$id" =~ ^[0-9]+$ ]] || { echo "provision-env: '$id' is not a VMID" >&2; exit 78; }
+  if [ "$id" -lt "$MIN_ID" ] || [ "$id" -gt "$MAX_ID" ]; then
+    echo "provision-env: VMID $id is OUTSIDE the sandbox range $MIN_ID-$MAX_ID." >&2
+    echo "  Real infrastructure lives below $MIN_ID and this tool will not touch it." >&2
+    echo "  If you need a production environment, that is Steve's approval, not this tool." >&2
+    exit 78
+  fi
+}
+
+audit() { printf '%s %s %s\n' "$(date -Iseconds)" "$AGENT" "$*" >> "$LOG" 2>/dev/null || true; }
+
+case "$VERB" in
+  list)
+    echo "sandbox containers ($MIN_ID-$MAX_ID) on $NODE:"
+    px "pct list" 2>/dev/null | awk -v lo="$MIN_ID" -v hi="$MAX_ID" \
+      'NR==1{print "  "$0} NR>1 && $1>=lo && $1<=hi {print "  "$0}'
+    ;;
+
+  next-id)
+    used="$(px "pct list" 2>/dev/null | awk 'NR>1{print $1}')"
+    for i in $(seq "$MIN_ID" "$MAX_ID"); do
+      grep -qx "$i" <<<"$used" || { echo "$i"; exit 0; }
+    done
+    echo "provision-env: no free VMID in $MIN_ID-$MAX_ID — destroy an old sandbox first" >&2; exit 1
+    ;;
+
+  create)
+    # create <id> <hostname> [cores] [ram_mb] [disk_gb]
+    id="${1:?usage: create <id> <hostname> [cores] [ram_mb] [disk_gb]}"; check_id "$id"
+    name="${2:?hostname required}"
+    [[ "$name" =~ ^test-[a-z0-9][a-z0-9-]{1,24}$ ]] || {
+      echo "provision-env: hostname must match test-<name> (lowercase, 2-25 chars)" >&2; exit 78; }
+    cores="${3:-2}"; ram="${4:-1024}"; disk="${5:-8}"
+    # Caps: a sandbox that can exhaust the node is not a sandbox.
+    (( cores >= 1 && cores <= 4 ))   || { echo "provision-env: cores must be 1-4" >&2; exit 78; }
+    (( ram   >= 256 && ram <= 4096 )) || { echo "provision-env: ram_mb must be 256-4096" >&2; exit 78; }
+    (( disk  >= 2 && disk <= 32 ))    || { echo "provision-env: disk_gb must be 2-32" >&2; exit 78; }
+
+    px "pct status $id" >/dev/null 2>&1 && { echo "provision-env: $id already exists" >&2; exit 1; }
+    audit "create $id $name cores=$cores ram=$ram disk=$disk"
+    px "pct create $id '$TEMPLATE' \
+          --hostname '$name' --cores $cores --memory $ram --swap 0 \
+          --rootfs $STORAGE:$disk \
+          --net0 name=eth0,bridge=vmbr0,ip=dhcp \
+          --features nesting=1 --unprivileged 1 --onboot 0 \
+          --description 'SANDBOX — created by $AGENT via provision-env. Disposable.' \
+        && pct start $id" 2>&1 | tail -6
+    ;;
+
+  status)
+    id="${1:?usage: status <id>}"; check_id "$id"
+    px "pct status $id; pct config $id | grep -E '^(hostname|cores|memory|rootfs|net0)'" 2>&1
+    ;;
+
+  ip)
+    id="${1:?usage: ip <id>}"; check_id "$id"
+    px "pct exec $id -- ip -4 -o addr show dev eth0" 2>&1 | grep -oE 'inet [0-9.]+' | cut -d' ' -f2
+    ;;
+
+  exec)
+    # exec <id> <command...> — inside a sandbox container only.
+    id="${1:?usage: exec <id> <command...>}"; check_id "$id"; shift
+    [ $# -gt 0 ] || { echo "provision-env: no command given" >&2; exit 78; }
+    audit "exec $id -- $*"
+    px "pct exec $id -- bash -lc $(printf '%q' "$*")" 2>&1
+    ;;
+
+  destroy)
+    id="${1:?usage: destroy <id>}"; check_id "$id"
+    # Refuse to destroy anything not created here, even inside the range.
+    px "pct config $id 2>/dev/null | grep -q 'SANDBOX'" || {
+      echo "provision-env: $id is not a provision-env sandbox — refusing to destroy" >&2; exit 78; }
+    audit "destroy $id"
+    px "pct stop $id --skiplock 2>/dev/null; sleep 2; pct destroy $id --purge" 2>&1 | tail -3
+    ;;
+
+  help|*)
+    cat <<EOF
+provision-env — sandbox LXC lifecycle. Range $MIN_ID-$MAX_ID on $NODE ($STORAGE).
+
+  list                                  sandbox containers only
+  next-id                               lowest free VMID in range
+  create <id> <test-name> [cores] [ram_mb] [disk_gb]
+                                        defaults 2 / 1024 / 8; caps 4 / 4096 / 32
+  status <id>                           run state + config
+  ip <id>                               DHCP address
+  exec <id> <command...>                run inside a sandbox container
+  destroy <id>                          only containers this tool created
+
+Anything outside $MIN_ID-$MAX_ID is refused before any Proxmox call is made.
+Production environments are Steve's approval, not this tool's job.
+EOF
+    ;;
+esac
