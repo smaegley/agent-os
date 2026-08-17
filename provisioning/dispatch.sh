@@ -204,3 +204,4 @@ NEEDS_STEVE="$NEEDS_STEVE$BLOCKED$UNPROVISIONED"
 [ -n "$NEEDS_STEVE" ] && sudo -n /usr/local/bin/notify '#ops-prod' \
   "Needs you:"$'\n'"$NEEDS_STEVE" >/dev/null
 echo "$(date -Iseconds) dispatch: routed=$n" >> "$REPO/log/dispatch.log"
+"$(dirname "$0")/board.sh" >/dev/null 2>&1 || true
