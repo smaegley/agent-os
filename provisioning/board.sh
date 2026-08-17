@@ -53,8 +53,14 @@ done < <(git log --format='%ar|%an|%s' -10)
 
 LAST="$(grep -E '^[0-9]{4}-' log/dispatch.log 2>/dev/null | tail -1 | cut -d' ' -f1 | cut -dT -f2 | cut -d+ -f1)"
 LAST="${LAST:-never}"
-if crontab -l 2>/dev/null | grep -q 'dispatch.sh'; then
-  NEXT="hourly, 08:00–22:00 — next at $(date -d "$(date -d '+1 hour' '+%H:00')" '+%H:%M' 2>/dev/null)"
+CRONLINE="$(crontab -l 2>/dev/null | grep -E 'dispatch\.sh' | grep -v '^#' | head -1)"
+if [ -n "$CRONLINE" ]; then
+  MIN="$(echo "$CRONLINE" | awk '{print $1}')"; HRS="$(echo "$CRONLINE" | awk '{print $2}')"
+  case "$MIN" in
+    \*/*) EVERY="every ${MIN#*/} min" ;;
+    *)    EVERY="hourly" ;;
+  esac
+  NEXT="$EVERY, ${HRS/-/:00–}:00"
 else
   NEXT="NOT SCHEDULED — work only moves when dispatch.sh is run by hand"
 fi
