@@ -110,6 +110,21 @@ case "$VERB" in
     px "pct exec $id -- bash -lc $(printf '%q' "$*")" 2>&1
     ;;
 
+  install-token)
+    # install-token <id> <dest-path> — inject the read-only Proxmox token into a
+    # sandbox container as root. The agent never sees the secret.
+    id="${1:?usage: install-token <id> <dest-path>}"; check_id "$id"
+    dest="${2:?destination path inside the container required}"
+    case "$dest" in /*) ;; *) echo "provision-env: dest must be absolute" >&2; exit 78;; esac
+    TOKFILE=/etc/maegley/pve-token
+    [ -r "$TOKFILE" ] || { echo "provision-env: no token at $TOKFILE" >&2; exit 78; }
+    audit "install-token $id -> $dest"
+    tok="$(cat "$TOKFILE")"
+    px "pct exec $id -- bash -lc $(printf '%q' "install -d -m 700 \"\$(dirname "$dest")\" && umask 077 && cat > '$dest'")" <<<"$tok" \
+      && echo "  token installed at $dest in $id (tokenid root@pam!pvedash, PVEAuditor, read-only)"
+    unset tok
+    ;;
+
   destroy)
     id="${1:?usage: destroy <id>}"; check_id "$id"
     # Refuse to destroy anything not created here, even inside the range.
@@ -130,6 +145,7 @@ provision-env — sandbox LXC lifecycle. Range $MIN_ID-$MAX_ID on $NODE ($STORAG
   status <id>                           run state + config
   ip <id>                               DHCP address
   exec <id> <command...>                run inside a sandbox container
+  install-token <id> <abs-path>         inject the read-only Proxmox token (agent never sees it)
   destroy <id>                          only containers this tool created
 
 Anything outside $MIN_ID-$MAX_ID is refused before any Proxmox call is made.
