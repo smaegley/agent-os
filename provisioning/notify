@@ -11,6 +11,11 @@
 # as another agent. That is the whole reason this runs through sudo rather than
 # handing each agent the token.
 #
+# #ops-prod means "Steve must act", so it carries a channel mention. Slack's
+# mobile default is "Direct messages, mentions & keywords" — a plain bot message
+# in a channel produces NO push notification at all, which is working as designed
+# and looks exactly like a broken integration. #program stays unmentioned: it is
+# a log to read when you choose, not an interrupt.
 # Chat is the doorbell, not the record: post a pointer to a git artifact.
 # Never paste specs, evidence, or credentials into a message.
 
@@ -41,6 +46,14 @@ case "$CHANNEL" in
   \#program|\#ops-prod|\#proj-*) ;;
   *) echo "notify: channel '$CHANNEL' not permitted" >&2; exit 77 ;;
 esac
+
+# Prefix the mention for the act-on-this channel only, and never twice.
+if [ "$CHANNEL" = "#ops-prod" ]; then
+  case "$MESSAGE" in
+    *'<!channel>'*|*'<!here>'*) ;;
+    *) MESSAGE="<!channel> $MESSAGE" ;;
+  esac
+fi
 
 [ -r "$TOKEN_FILE" ] || { echo "notify: no token at $TOKEN_FILE" >&2; exit 78; }
 TOKEN="$(< "$TOKEN_FILE")"
