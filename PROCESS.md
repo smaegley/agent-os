@@ -27,3 +27,16 @@ carried by the blocked→escalation path.)
    itself on greenfield work whose total loss costs nothing — never on the HA config mirror,
    never on a production hypervisor.
 3. Chat is the doorbell AND the visibility layer; git remains the record.
+
+## The coordinator, named
+
+The state machine routes; it does not judge. Three things are coordination and belong to
+**Todd**, explicitly — not to a PM agent re-deriving context per wake, and never to Steve:
+
+1. **Interpreting blocks** — reading why an item stopped and routing it accordingly.
+2. **Filling world-gaps** — a blocked item that needs something built (a repo, a credential, an
+   environment) gets the thing built, then unblocked.
+3. **Sequencing** — via `priority:` in item front matter (1 = most urgent, unset = 5).
+   Alphabetical accident is not a prioritization policy.
+
+Revisit a dedicated coordinator only if the backlog makes prioritization a daily judgment task.

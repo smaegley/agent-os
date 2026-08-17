@@ -79,9 +79,13 @@ for f in projects/*/*.md; do
   BEFORE["$f"]="$(fm state "$f")"
 done
 
-for f in projects/*/*.md; do
-  [ -e "$f" ] || continue
-  head -1 "$f" | grep -q '^---$' || continue          # no front matter → not a work item
+ORDERED="$(for f in projects/*/*.md; do
+  [ -e "$f" ] && head -1 "$f" | grep -q '^---$' || continue
+  pri="$(fm priority "$f")"; [[ "$pri" =~ ^[0-9]+$ ]] || pri=5
+  printf '%s\t%s\n' "$pri" "$f"
+done | sort -n -s | cut -f2)"
+
+for f in $ORDERED; do
   id="$(fm id "$f")";    [ -n "$id" ] || continue
   state="$(fm state "$f")"; proj="$(fm project "$f")"
   infra="$(fm infra "$f")"; uf="$(fm user_facing "$f")"
