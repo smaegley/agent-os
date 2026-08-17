@@ -43,7 +43,10 @@ esac
 
 # Channel allowlist — an agent must not invent channels or DM the workspace.
 case "$CHANNEL" in
-  \#program|\#ops-prod|\#proj-*) ;;
+  # ops-command is the inbound bridge channel (WR-005): Steve talks to the team
+  # there and replies come back to the same place. Private, and the bot cannot
+  # enumerate channels — it only sees what it is invited to.
+  \#program|\#ops-prod|\#ops-command|\#proj-*) ;;
   *) echo "notify: channel '$CHANNEL' not permitted" >&2; exit 77 ;;
 esac
 
