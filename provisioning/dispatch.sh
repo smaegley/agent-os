@@ -53,6 +53,7 @@ route() {
     spec-ready)     [ "$2" = true ] && echo john || echo randal ;;
     design-ready)   echo randal ;;
     env-needed)     echo ken ;;                           # build/refresh a test environment
+    token-needed)   echo "" ;;                            # a credential only Todd can mint → stops
     # 'qa-ready' is the agents' own token, not mine. They had no published state
     # vocabulary, so they coined one and used it consistently — Randal even noted
     # "states are convention tokens" in his handoff. Their word wins: it is the one
@@ -195,6 +196,7 @@ for f in projects/*/*.md; do
   case "$now" in
     qa-passed|uat-passed) NEEDS_STEVE+="  $id is verified and waiting on your deploy approval"$'\n' ;;
     needs-exec)           NEEDS_STEVE+="  $id — Todd will execute QA's run request; you will get a plain-language approval ask first if anything touches prod"$'\n' ;;
+    token-needed)         NEEDS_STEVE+="  $id — a credential must be created; Todd asks Steve before minting it"$'\n' ;;
   esac
 done
 

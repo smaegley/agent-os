@@ -69,6 +69,7 @@ they chose rather than overriding it.
 | `spec-ready` | John if `infra: true`, else Randal | spec exists |
 | `design-ready` | Randal | design decision recorded as an ADR |
 | `env-needed` | Ken | a test environment must be built or refreshed before QA can verify |
+| `token-needed` | **stops — Todd, with Steve's go** | a credential must be created that no agent may mint |
 | `qa-ready` | Eric | artifact committed, awaiting independent verification |
 | `needs-exec` | **stops — Steve** | QA wrote a run request; commands must be executed by the operator |
 | `qa-passed` | Andrea if `user_facing: true`, else stops | verified |
