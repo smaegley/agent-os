@@ -114,12 +114,18 @@ for f in projects/*/*.md; do
     continue
   fi
 
+  case " ${BUSY:-} " in *" $who "*)
+    STOPPED+="  $id [$proj] state=$state → $who (held: $who already dispatched this run)"$'\n'
+    continue ;;
+  esac
+
   if [ "$n" -ge "$MAX_DISPATCH" ]; then
     STOPPED+="  $id [$proj] state=$state → $who (deferred: run cap $MAX_DISPATCH reached)"$'\n'
     continue
   fi
 
   ROUTED+="  $id [$proj] state=$state → $who"$'\n'
+  BUSY="${BUSY:-} $who"
   n=$((n+1))
   [ "$DRY_RUN" = "1" ] && continue
 
