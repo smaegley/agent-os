@@ -27,6 +27,15 @@
 
 set -uo pipefail
 
+# Only one dispatch at a time. At a 15-minute cadence with a 30-minute agent
+# timeout, overlapping runs are not a risk — they are a certainty. Two runs
+# picking up the same item invoke the same agent twice on the same work, which
+# is how WR-001 acquired two parallel pairs of commits for one verdict. Eric
+# caught it and said so; without the lock it would recur every long run.
+LOCK=/tmp/maegley-dispatch.lock
+exec 9>"$LOCK"
+flock -n 9 || { echo "dispatch: another run holds the lock — skipping"; exit 0; }
+
 REPO="${PROGRAM_REPO:-/home/steve/maegley-lab/program}"
 MAX_DISPATCH="${MAX_DISPATCH:-2}"
 AGENT_TIMEOUT="${AGENT_TIMEOUT:-1800}"   # code work needs far longer than doc work
