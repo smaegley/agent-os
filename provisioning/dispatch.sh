@@ -52,6 +52,7 @@ route() {
     new)            echo theresa ;;                       # BA writes the spec
     spec-ready)     [ "$2" = true ] && echo john || echo randal ;;
     design-ready)   echo randal ;;
+    env-needed)     echo ken ;;                           # build/refresh a test environment
     # 'qa-ready' is the agents' own token, not mine. They had no published state
     # vocabulary, so they coined one and used it consistently — Randal even noted
     # "states are convention tokens" in his handoff. Their word wins: it is the one
