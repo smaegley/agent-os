@@ -58,7 +58,7 @@ route() {
     # vocabulary, so they coined one and used it consistently — Randal even noted
     # "states are convention tokens" in his handoff. Their word wins: it is the one
     # actually written into the work items. 'built' kept as an accepted synonym.
-    qa-ready|built) echo eric ;;                          # QA verifies — different access than the builder
+    qa-ready|qa-prep|built) echo eric ;;                          # QA verifies — different access than the builder
     # QA is read-only by design, but some acceptance criteria can only be checked
     # by RUNNING the thing against prod. Rather than widen Eric's access or let him
     # infer a verdict from source, he writes the exact commands and Todd executes
@@ -66,9 +66,12 @@ route() {
     needs-exec)     echo "" ;;
     qa-passed)      [ "$3" = true ] && echo andrea || echo "" ;;
     uat-passed)     echo "" ;;                            # → Steve approves deploy
-    *)              echo "" ;;
+    *)              echo "UNKNOWN" ;;
   esac
 }
+
+# States the machine deliberately stops on. Anything else is a mistake, not a decision.
+KNOWN_TERMINAL="needs-exec token-needed qa-passed uat-passed accepted done"
 
 ROUTED=""; STOPPED=""; BLOCKED=""; UNPROVISIONED=""; n=0
 
@@ -97,8 +100,16 @@ for f in $ORDERED; do
   fi
 
   who="$(route "$state" "${infra:-false}" "${uf:-false}")"
+  if [ "$who" = UNKNOWN ]; then
+    case " $KNOWN_TERMINAL " in
+      *" $state "*) STOPPED+="  $id [$proj] state=$state — stops here by design"$'\n' ;;
+      *) STOPPED+="  $id [$proj] state='$state' is NOT A KNOWN STATE — unroutable, likely a typo"$'\n'
+         NEEDS_STEVE+="  $id — state '$state' is not in the state machine; Todd to correct"$'\n' ;;
+    esac
+    continue
+  fi
   if [ -z "$who" ]; then
-    STOPPED+="  $id [$proj] state=$state — no auto-route (terminal, or awaiting Steve)"$'\n'
+    STOPPED+="  $id [$proj] state=$state — stops here by design"$'\n'
     continue
   fi
 
