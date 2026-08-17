@@ -71,7 +71,11 @@ read-only on purpose. Do not resolve that by widening QA's access, and never res
 reading the source and inferring what a run would do. Inspection and execution are different
 kinds of evidence and must not be substituted for one another.
 
-Instead, **QA directs and the operator executes**:
+Instead, **QA directs and the operator executes** — and the operator is **Todd**, never Steve.
+Steve is never handed raw commands. If a run request contains anything destructive or
+prod-touching, Todd first sends Steve a plain-language approval ask: what will run, why, the
+risk, the expected outcome, and the rollback. Steve answers yes or no. That is the entirety of
+his involvement in execution.
 
 1. Verify by inspection everything that inspection can settle, and record those verdicts.
 2. For the rest, write a run request to `projects/<project>/qa/<date>-<item>-run-request.md`:

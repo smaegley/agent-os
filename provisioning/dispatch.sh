@@ -123,6 +123,11 @@ for f in projects/*/*.md; do
   n=$((n+1))
   [ "$DRY_RUN" = "1" ] && continue
 
+  # Steve asked for start visibility explicitly: "I see messages from each
+  # person when they start". I argued completions were enough; he overruled.
+  sudo -n /usr/local/bin/notify '#program' \
+    "${who^} starting $id ($state → next step)" >/dev/null 2>&1 || true
+
   sudo -u "$who" bash -lc "cd /home/$who/work/program && git pull -q origin main 2>/dev/null; \
     timeout "$AGENT_TIMEOUT" claude -p \"You are ${who^}. Work item ${id} is in state '${state}' and routed to you.
 
@@ -176,7 +181,7 @@ for f in projects/*/*.md; do
   # rather than letting it sit silently in HELD looking parked.
   case "$now" in
     qa-passed|uat-passed) NEEDS_STEVE+="  $id is verified and waiting on your deploy approval"$'\n' ;;
-    needs-exec)           NEEDS_STEVE+="  $id — Eric needs commands run he cannot run himself; see the item's qa/ run request"$'\n' ;;
+    needs-exec)           NEEDS_STEVE+="  $id — Todd will execute QA's run request; you will get a plain-language approval ask first if anything touches prod"$'\n' ;;
   esac
 done
 
