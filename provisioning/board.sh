@@ -48,11 +48,14 @@ for f in projects/*/*.md; do
       needs-exec)
         rq="$(ls -t projects/*/qa/*run-request*.md 2>/dev/null | xargs -r grep -l "work_item: $id" 2>/dev/null | head -1)"
         if [ -n "$rq" ]; then
-          cmds="$(sed -n '/^```$/,/^```$/p' "$rq" | grep -vE '^```' | grep -vE '^\s*$' | head -14 \
-                  | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g')"
+          tests="$(grep -E '^#{2,3} (T-|Pre-step)' "$rq" | sed -e 's/^#* *//' -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g')"
+          nlines="$(sed -n '/^```$/,/^```$/p' "$rq" | grep -vE '^```|^\s*$' | wc -l)"
+          warn=""
+          grep -qE '\-\-apply|deletes data|DESTRUCTIVE' "$rq" && \
+            warn="<span class=\"warn\">This request contains a step that WRITES to production. Read it before running any of it.</span>"
           DETAIL="<tr class=\"detail\"><td></td><td colspan=5><div class=\"ask\">"
-          DETAIL+="<b>Run these</b> — from <code>$rq</code><pre>$cmds</pre>"
-          DETAIL+="<span class=\"hint\">Paste the output back to Claude. QA declared the pass condition before seeing results.</span>"
+          DETAIL+="<b>QA needs these run</b> — ${nlines} commands across:<pre>$tests</pre>"
+          DETAIL+="$warn<span class=\"hint\">Open <code>$rq</code> for the commands — do not run a partial set; the tests build on each other. Paste output back to Claude.</span>"
           DETAIL+="</div></td></tr>"
         fi ;;
       blocked)
