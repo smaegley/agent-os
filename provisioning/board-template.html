@@ -45,6 +45,8 @@
   .st-needs-exec,.st-blocked,.st-qa-passed,.st-uat-passed { background:var(--you-w); color:var(--you); }
   .st-qa-ready,.st-design-ready,.st-spec-ready,.st-new { background:var(--team-w); color:var(--team); }
 
+  .sched { font-size:.85rem; color:var(--soft); margin:0 0 1rem; }
+  .sched b { color:var(--ink); }
   figure { margin:0; }
   svg { max-width:100%; height:auto; display:block; }
   figcaption { font-size:.8rem; color:var(--mute); margin-top:.6rem; }
@@ -74,6 +76,17 @@ Everything else is moving without you.</span></div>
 <table>
   <tr><th>Item</th><th>What it is</th><th>State</th><th>Whose move</th><th>Meaning</th><th>Updated</th></tr>
   <!--ROWS-->
+</table>
+</div>
+
+<h2>Recent activity</h2>
+<p class="sched">Dispatcher: <b><!--NEXT--></b> · last run <b><!--LAST--></b>. Agents do not run
+continuously — they wake only when the dispatcher fires, do one step, and exit. A queued item is
+not being worked on right now.</p>
+<div class="scroll">
+<table>
+  <tr><th>When</th><th>Who</th><th>What they committed</th></tr>
+  <!--ACTIVITY-->
 </table>
 </div>
 

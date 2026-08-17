@@ -17,10 +17,10 @@ fm() { sed -n '2,/^---$/p' "$2" | grep -E "^$1:" | head -1 | cut -d: -f2- | xarg
 
 # state → (who acts, is it Steve's move, human-readable meaning)
 meaning() { case "$1" in
-  new)          echo "Theresa|0|needs requirements written" ;;
-  spec-ready)   echo "John|0|spec written, awaiting design decision" ;;
-  design-ready) echo "Randal|0|design recorded, awaiting build" ;;
-  qa-ready)     echo "Eric|0|built, awaiting independent verification" ;;
+  new)          echo "Theresa|0|queued — needs requirements written" ;;
+  spec-ready)   echo "John|0|queued — spec written, awaiting design decision" ;;
+  design-ready) echo "Randal|0|queued — design recorded, awaiting build" ;;
+  qa-ready)     echo "Eric|0|queued — built, awaiting independent verification" ;;
   needs-exec)   echo "You|1|QA wrote commands it cannot run — you or Todd execute" ;;
   qa-passed)    echo "You|1|verified — awaiting your approval to deploy" ;;
   uat-passed)   echo "You|1|user-tested — awaiting your approval to deploy" ;;
@@ -43,7 +43,22 @@ for f in projects/*/*.md; do
   ROWS+="<td class=\"who\">$actor</td><td class=\"desc\">$desc</td><td class=\"age\">$updated</td></tr>"
 done
 
+# What the agents have actually DONE — from git, the only honest source.
+ACTIVITY=""
+while IFS='|' read -r when who what; do
+  [ -n "$who" ] || continue
+  ACTIVITY+="<tr><td class=\"age\">$when</td><td class=\"who\">$who</td><td>$what</td></tr>"
+done < <(git log --format='%ar|%an|%s' -10)
+[ -n "$ACTIVITY" ] || ACTIVITY="<tr><td colspan=3 class=\"desc\">No commits yet.</td></tr>"
+
+LAST="$(grep -E '^[0-9]{4}-' log/dispatch.log 2>/dev/null | tail -1 | cut -d' ' -f1 | cut -dT -f2 | cut -d+ -f1)"
+LAST="${LAST:-never}"
+if crontab -l 2>/dev/null | grep -q 'dispatch.sh'; then
+  NEXT="hourly, 08:00–22:00 — next at $(date -d "$(date -d '+1 hour' '+%H:00')" '+%H:%M' 2>/dev/null)"
+else
+  NEXT="NOT SCHEDULED — work only moves when dispatch.sh is run by hand"
+fi
 STAMP="$(date '+%-d %b %Y, %H:%M')"
 sed -e "s|<!--ROWS-->|$ROWS|" -e "s|<!--MINE-->|$MINE|" -e "s|<!--TOTAL-->|$TOTAL|" \
-    -e "s|<!--STAMP-->|$STAMP|" "$HERE/board-template.html" > "$OUT"
+    -e "s|<!--STAMP-->|$STAMP|" -e "s|<!--ACTIVITY-->|$ACTIVITY|" -e "s|<!--LAST-->|$LAST|" -e "s|<!--NEXT-->|$NEXT|" "$HERE/board-template.html" > "$OUT"
 echo "→ board written: $OUT  ($MINE of $TOTAL waiting on you)"
