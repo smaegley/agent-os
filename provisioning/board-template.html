@@ -1,0 +1,193 @@
+<title>Maegley Lab Control</title>
+<style>
+  :root {
+    --ground:#F2F5F7; --surface:#FFFFFF; --raise:#E9EEF2;
+    --ink:#16202B; --soft:#4A5A6A; --mute:#7C8B99; --rule:#D8DFE5;
+    --you:#A85A22; --you-w:#F7EADF; --team:#2C6E52; --team-w:#E4F0EA;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+    --ground:#0E151C; --surface:#161F28; --raise:#1E2831; --ink:#E4EAEF; --soft:#A7B4C0;
+    --mute:#7A8794; --rule:#2A3742; --you:#D98A4E; --you-w:#33241A; --team:#6FBF98; --team-w:#1B2E26;
+  } }
+  :root[data-theme="dark"] {
+    --ground:#0E151C; --surface:#161F28; --raise:#1E2831; --ink:#E4EAEF; --soft:#A7B4C0;
+    --mute:#7A8794; --rule:#2A3742; --you:#D98A4E; --you-w:#33241A; --team:#6FBF98; --team-w:#1B2E26;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--ground); color:var(--ink); font-family:var(--sans);
+         font-size:16px; line-height:1.55; -webkit-font-smoothing:antialiased; }
+  .wrap { max-width:64rem; margin:0 auto; padding:2.5rem 1.5rem 4rem; }
+  header { display:flex; justify-content:space-between; align-items:flex-end; gap:1rem;
+           border-bottom:2px solid var(--ink); padding-bottom:1rem; margin-bottom:2rem; flex-wrap:wrap; }
+  h1 { font-family:var(--mono); font-size:clamp(1.4rem,3.5vw,2rem); margin:0; letter-spacing:-.02em; font-weight:600; }
+  .stamp { font-family:var(--mono); font-size:.72rem; color:var(--mute); }
+  h2 { font-family:var(--mono); font-size:.78rem; letter-spacing:.12em; text-transform:uppercase;
+       color:var(--mute); margin:2.75rem 0 1rem; padding-bottom:.4rem; border-bottom:1px solid var(--rule); }
+
+  .callout { background:var(--you-w); border-left:3px solid var(--you); border-radius:3px;
+             padding:.85rem 1.1rem; display:flex; align-items:baseline; gap:.6rem; flex-wrap:wrap; }
+  .callout b { font-family:var(--mono); font-size:1.5rem; color:var(--you); line-height:1; }
+
+  .scroll { overflow-x:auto; }
+  table { border-collapse:collapse; width:100%; font-size:.87rem; }
+  th,td { text-align:left; padding:.55rem .7rem; border-bottom:1px solid var(--rule); vertical-align:top; }
+  th { font-family:var(--mono); font-size:.66rem; letter-spacing:.1em; text-transform:uppercase;
+       color:var(--mute); font-weight:500; }
+  tr.mine { background:var(--you-w); }
+  tr.mine .who { color:var(--you); font-weight:600; }
+  td.id { font-family:var(--mono); font-weight:600; white-space:nowrap; }
+  td.age, td.desc { color:var(--soft); }
+  td.age { font-family:var(--mono); font-size:.76rem; white-space:nowrap; }
+  .st { font-family:var(--mono); font-size:.68rem; padding:.16rem .4rem; border-radius:2px;
+        background:var(--raise); color:var(--soft); white-space:nowrap; }
+  .st-needs-exec,.st-blocked,.st-qa-passed,.st-uat-passed { background:var(--you-w); color:var(--you); }
+  .st-qa-ready,.st-design-ready,.st-spec-ready,.st-new { background:var(--team-w); color:var(--team); }
+
+  figure { margin:0; }
+  svg { max-width:100%; height:auto; display:block; }
+  figcaption { font-size:.8rem; color:var(--mute); margin-top:.6rem; }
+
+  .steps { display:grid; gap:.6rem; grid-template-columns:repeat(auto-fit,minmax(15rem,1fr)); }
+  .step { background:var(--surface); border:1px solid var(--rule); border-left:3px solid var(--you);
+          border-radius:3px; padding:.8rem .95rem; }
+  .step h3 { margin:0 0 .3rem; font-size:.95rem; }
+  .step p { margin:0; font-size:.83rem; color:var(--soft); }
+  .step code, code { font-family:var(--mono); font-size:.82em; background:var(--raise);
+                     padding:.08rem .28rem; border-radius:2px; }
+  footer { margin-top:3rem; padding-top:1rem; border-top:1px solid var(--rule);
+           font-size:.78rem; color:var(--mute); }
+</style>
+
+<div class="wrap">
+<header>
+  <h1>Maegley Lab Control</h1>
+  <span class="stamp">generated <!--STAMP--> · derived from git</span>
+</header>
+
+<div class="callout"><b><!--MINE--></b> <span>of <!--TOTAL--> work items are waiting on you.
+Everything else is moving without you.</span></div>
+
+<h2>Work board</h2>
+<div class="scroll">
+<table>
+  <tr><th>Item</th><th>What it is</th><th>State</th><th>Whose move</th><th>Meaning</th><th>Updated</th></tr>
+  <!--ROWS-->
+</table>
+</div>
+
+<h2>Where you touch the process</h2>
+<figure>
+<svg viewBox="0 0 880 300" role="img" aria-label="Work moves through five agent stages; Steve starts the work, answers blocked questions, executes commands QA cannot run, and approves deploys. Nothing reaches production without him.">
+  <defs>
+    <marker id="a" viewBox="0 0 10 8" refX="9" refY="4" markerWidth="8" markerHeight="7" orient="auto">
+      <polygon points="0,0 10,4 0,8" fill="currentColor"/>
+    </marker>
+    <marker id="ay" viewBox="0 0 10 8" refX="9" refY="4" markerWidth="8" markerHeight="7" orient="auto">
+      <polygon points="0,0 10,4 0,8" fill="#A85A22"/>
+    </marker>
+  </defs>
+
+  <!-- agent pipeline -->
+  <g font-family="ui-monospace, Menlo, monospace" font-size="11" fill="currentColor">
+    <rect x="112" y="120" width="118" height="44" rx="3" fill="none" stroke="currentColor" stroke-width="1.2"/>
+    <text x="171" y="140" text-anchor="middle" font-size="12">Theresa</text>
+    <text x="171" y="155" text-anchor="middle" font-size="10" opacity=".65">writes spec</text>
+
+    <rect x="262" y="120" width="118" height="44" rx="3" fill="none" stroke="currentColor" stroke-width="1.2"/>
+    <text x="321" y="140" text-anchor="middle" font-size="12">John</text>
+    <text x="321" y="155" text-anchor="middle" font-size="10" opacity=".65">records ADR</text>
+
+    <rect x="412" y="120" width="118" height="44" rx="3" fill="none" stroke="currentColor" stroke-width="1.2"/>
+    <text x="471" y="140" text-anchor="middle" font-size="12">Randal</text>
+    <text x="471" y="155" text-anchor="middle" font-size="10" opacity=".65">builds it</text>
+
+    <rect x="562" y="120" width="118" height="44" rx="3" fill="none" stroke="currentColor" stroke-width="1.2"/>
+    <text x="621" y="140" text-anchor="middle" font-size="12">Eric</text>
+    <text x="621" y="155" text-anchor="middle" font-size="10" opacity=".65">verifies</text>
+
+    <line x1="230" y1="142" x2="256" y2="142" stroke="currentColor" marker-end="url(#a)"/>
+    <line x1="380" y1="142" x2="406" y2="142" stroke="currentColor" marker-end="url(#a)"/>
+    <line x1="530" y1="142" x2="556" y2="142" stroke="currentColor" marker-end="url(#a)"/>
+  </g>
+
+  <!-- Steve: start -->
+  <g fill="#A85A22" font-family="ui-monospace, Menlo, monospace">
+    <rect x="8" y="112" width="90" height="60" rx="3" fill="none" stroke="#A85A22" stroke-width="2"/>
+    <text x="53" y="134" text-anchor="middle" font-size="12" font-weight="600">You</text>
+    <text x="53" y="149" text-anchor="middle" font-size="10">file a work</text>
+    <text x="53" y="161" text-anchor="middle" font-size="10">request</text>
+    <line x1="98" y1="142" x2="106" y2="142" stroke="#A85A22" marker-end="url(#ay)"/>
+
+    <!-- deploy gate -->
+    <rect x="712" y="112" width="112" height="60" rx="3" fill="none" stroke="#A85A22" stroke-width="2"/>
+    <text x="768" y="134" text-anchor="middle" font-size="12" font-weight="600">You</text>
+    <text x="768" y="149" text-anchor="middle" font-size="10">approve the</text>
+    <text x="768" y="161" text-anchor="middle" font-size="10">deploy</text>
+    <line x1="680" y1="142" x2="706" y2="142" stroke="#A85A22" marker-end="url(#ay)"/>
+    <text x="694" y="132" text-anchor="middle" font-size="9">qa-passed</text>
+
+    <!-- needs-exec loop -->
+    <path d="M621 120 L621 74 L768 74 L768 106" fill="none" stroke="#A85A22" stroke-width="1.4"
+          stroke-dasharray="4 3" marker-end="url(#ay)"/>
+    <text x="694" y="66" text-anchor="middle" font-size="10">needs-exec — QA wrote commands it cannot run</text>
+
+    <!-- blocked loop -->
+    <path d="M471 164 L471 218 L53 218 L53 178" fill="none" stroke="#A85A22" stroke-width="1.4"
+          stroke-dasharray="4 3" marker-end="url(#ay)"/>
+    <text x="262" y="234" text-anchor="middle" font-size="10">blocked — an agent needs a decision or access only you have</text>
+  </g>
+
+  <g font-family="ui-monospace, Menlo, monospace" font-size="10" fill="currentColor" opacity=".6">
+    <text x="440" y="276" text-anchor="middle">Solid = automatic. Dashed = it stops and waits for you.</text>
+    <text x="440" y="291" text-anchor="middle">Production is never written without your approval.</text>
+  </g>
+</svg>
+<figcaption>Four agent stages run unattended. The three copper paths are the only places the
+pipeline stops for you — and one of them, deploy approval, cannot be bypassed.</figcaption>
+</figure>
+
+<h2>Your four jobs</h2>
+<div class="steps">
+  <div class="step">
+    <h3>1 · Start work</h3>
+    <p>Tell Claude what you want, or drop a file in <code>program/projects/&lt;project&gt;/</code> with
+    <code>state: new</code>. Theresa turns it into a spec. You never assign anyone — the state machine routes it.</p>
+  </div>
+  <div class="step">
+    <h3>2 · Answer when stuck</h3>
+    <p><code>blocked</code> means an agent hit a decision or a credential only you have. It escalates
+    to <code>#ops-prod</code> and never gets guessed at. Your answer gets recorded as an ADR, not left in chat.</p>
+  </div>
+  <div class="step">
+    <h3>3 · Run what QA can't</h3>
+    <p><code>needs-exec</code> means Eric wrote exact commands and the pass condition <em>before</em>
+    seeing results, because verifying needs production access QA deliberately lacks. Run them, paste the
+    output back, Eric rules on it.</p>
+  </div>
+  <div class="step">
+    <h3>4 · Approve the deploy</h3>
+    <p>Nothing reaches production automatically — by design, not by omission. Review the spec and
+    Eric's verdict, then say go. This gate caught a change built on a false premise today.</p>
+  </div>
+</div>
+
+<h2>Where to look</h2>
+<div class="scroll">
+<table>
+  <tr><th>You want</th><th>Look at</th></tr>
+  <tr><td>What the team thinks it's building</td><td><code>program/projects/&lt;p&gt;/spec/</code></td></tr>
+  <tr><td>Why a technical choice was made</td><td><code>program/projects/&lt;p&gt;/decisions/</code></td></tr>
+  <tr><td>Evidence something actually works</td><td><code>program/projects/&lt;p&gt;/qa/</code></td></tr>
+  <tr><td>What each agent is and can reach</td><td><code>agent-os/AGENTS.md</code></td></tr>
+  <tr><td>The rules everyone follows</td><td><code>agent-os/CLAUDE.md</code></td></tr>
+</table>
+</div>
+
+<footer>
+  Regenerate with <code>agent-os/provisioning/board.sh</code>. Every value on this page is read from
+  the work items at run time — the board is derived, never hand-maintained, so it cannot quietly
+  drift from the repo.
+</footer>
+</div>
