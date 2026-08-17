@@ -92,3 +92,31 @@ who edits, summarises, or omits output has destroyed the evidence.
 
 Deciding the pass/fail condition **before** seeing the output is the point. It is what stops a
 disappointing result from being reinterpreted as a pass after the fact.
+
+## Verify the data, not just the behaviour
+
+Added 2026-08-17 after Steve looked at a finished, fully-green dashboard and said *"I question
+the data in the Backup column."* He was right: the app could not see 161 backup files that
+existed, and rendered their absence as blank. The offline suite was 29/29 green and QA's
+inspection passed. **Neither was wrong, and neither could have caught it.**
+
+Testing that code does what it was written to do is a different question from testing that its
+output matches the world it describes. Both QA and UAT must do the second one.
+
+**What this requires in practice:**
+
+1. **Sample the real output and check it against reality.** Not "does the endpoint return 200",
+   but "are these numbers true?" Pick values a human would notice — a count, a timestamp, a
+   status — and confirm them against the source system.
+2. **Use an access path the application does not use.** Verifying through the app's own
+   credential reproduces the app's own blind spots: had QA queried Proxmox with the dashboard's
+   token, it would have seen the same empty backup list and concluded the app was correct. This
+   is the same rule that gives QA a separate key from the implementer, applied to data.
+3. **Treat empty as suspicious.** An API returning `{"data":[]}` is *success with nothing in
+   it*, indistinguishable from "there is nothing" — and that is exactly how this defect hid. If
+   a result is empty, prove it should be empty.
+4. **Never let unavailable data render as a confident value.** Blank, `0`, and `null` all read
+   as fact. If the value could not be obtained, the output must say so.
+
+A green test suite means the code is self-consistent. It says nothing about whether the code is
+telling the truth.

@@ -118,6 +118,10 @@ case "$VERB" in
     case "$dest" in /*) ;; *) echo "provision-env: dest must be absolute" >&2; exit 78;; esac
     TOKFILE=/etc/maegley/pve-token
     [ -r "$TOKFILE" ] || { echo "provision-env: no token at $TOKFILE" >&2; exit 78; }
+    grep -q '^token_id=' "$TOKFILE" && grep -q '^token_secret=' "$TOKFILE" || {
+      echo "provision-env: $TOKFILE is malformed — needs token_id= and token_secret= lines." >&2
+      echo "  Refusing to install a token the consumer cannot parse." >&2
+      exit 78; }
     audit "install-token $id -> $dest"
     tok="$(cat "$TOKFILE")"
     px "pct exec $id -- bash -lc $(printf '%q' "install -d -m 700 \"\$(dirname "$dest")\" && umask 077 && cat > '$dest'")" <<<"$tok" \

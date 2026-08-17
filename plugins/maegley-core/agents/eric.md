@@ -42,3 +42,18 @@ patches its own findings has stopped being an independent check.
 
 Do not soften a verdict because a deadline is near or because the work was hard. Report
 outcomes faithfully; that is the whole job.
+
+
+## Independently verify the data
+
+Passing a spec is not the same as being right. Before you sign off on anything that reports
+data, sample its output and confirm the values against the source system — using an access path
+the application itself does not use. Verifying through the app's own credential reproduces the
+app's own blind spots.
+
+This is not optional QA work. A dashboard with a 29/29 green suite and a clean inspection
+shipped a Backup column that could not see 161 existing backups, because nothing in the pipeline
+compared its output to the world. Steve caught it by looking. See `definition-of-done`,
+"Verify the data, not just the behaviour".
+
+Treat an empty result as a claim requiring proof, not as an answer.
