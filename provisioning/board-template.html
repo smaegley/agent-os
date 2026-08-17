@@ -46,6 +46,15 @@
   .st-needs-exec,.st-blocked,.st-qa-passed,.st-uat-passed { background:var(--you-w); color:var(--you); }
   .st-qa-ready,.st-design-ready,.st-spec-ready,.st-new { background:var(--team-w); color:var(--team); }
 
+  tr.detail td { border-bottom:1px solid var(--rule); padding-top:0; }
+  .ask { background:var(--you-w); border-left:3px solid var(--you); border-radius:3px;
+         padding:.7rem .9rem; margin:0 0 .5rem; }
+  .ask b { font-size:.82rem; }
+  .ask p { margin:.25rem 0 0; font-size:.85rem; color:var(--soft); }
+  .ask pre { font-family:var(--mono); font-size:.78rem; background:var(--surface);
+             border:1px solid var(--rule); border-radius:2px; padding:.6rem .7rem;
+             margin:.4rem 0 .35rem; overflow-x:auto; white-space:pre; }
+  .ask .hint { font-size:.76rem; color:var(--mute); }
   .sched { font-size:.85rem; color:var(--soft); margin:0 0 1rem; }
   .sched b { color:var(--ink); }
   figure { margin:0; }
@@ -66,7 +75,7 @@
 <div class="wrap">
 <header>
   <h1>Maegley Lab Control</h1>
-  <span class="stamp">generated <!--STAMP--> · derived from git</span>
+  <span class="stamp">generated <!--STAMP--> MT · derived from git · refreshes itself</span>
 </header>
 
 <div class="callout"><b><!--MINE--></b> <span>of <!--TOTAL--> work items are waiting on you.

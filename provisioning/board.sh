@@ -7,6 +7,7 @@
 # from the work items at run time; if the page and the repo disagree, the page
 # is stale and re-running this fixes it.
 set -uo pipefail
+export TZ="${MAEGLEY_TZ:-America/Denver}"   # HA's configured zone; the box itself runs UTC
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="${PROGRAM_REPO:-/home/steve/maegley-lab/program}"
 OUT="${1:-/home/codex/ha/maegley-lab-board.html}"
@@ -38,9 +39,31 @@ for f in projects/*/*.md; do
   TOTAL=$((TOTAL+1)); [ "$mine" = 1 ] && MINE=$((MINE+1))
   cls=$([ "$mine" = 1 ] && echo "mine" || echo "team")
   updated="$(git log -1 --format='%ar' -- "$f" 2>/dev/null)"
+
+  # For anything waiting on Steve, pull the actual ask onto the page. A board
+  # that says "needs you" and makes him go find out what is only half a board.
+  DETAIL=""
+  if [ "$mine" = 1 ]; then
+    case "$st" in
+      needs-exec)
+        rq="$(ls -t projects/*/qa/*run-request*.md 2>/dev/null | xargs -r grep -l "work_item: $id" 2>/dev/null | head -1)"
+        if [ -n "$rq" ]; then
+          cmds="$(sed -n '/^```$/,/^```$/p' "$rq" | grep -vE '^```' | grep -vE '^\s*$' | head -14 \
+                  | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g')"
+          DETAIL="<tr class=\"detail\"><td></td><td colspan=5><div class=\"ask\">"
+          DETAIL+="<b>Run these</b> — from <code>$rq</code><pre>$cmds</pre>"
+          DETAIL+="<span class=\"hint\">Paste the output back to Claude. QA declared the pass condition before seeing results.</span>"
+          DETAIL+="</div></td></tr>"
+        fi ;;
+      blocked)
+        why="$(grep -m1 -A2 -iE '^\*\*(why|blocked|reason)' "$f" 2>/dev/null | tail -1 | cut -c1-220)"
+        [ -n "$why" ] || why="$(git log -1 --format='%s' -- "$f")"
+        DETAIL="<tr class=\"detail\"><td></td><td colspan=5><div class=\"ask\"><b>Why it stopped</b><p>$(echo "$why" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g')</p></div></td></tr>" ;;
+    esac
+  fi
   ROWS+="<tr class=\"$cls\"><td class=\"id\">$id</td><td>$title</td>"
   ROWS+="<td><span class=\"st st-$st\">$st</span></td>"
-  ROWS+="<td class=\"who\">$actor</td><td class=\"desc\">$desc</td><td class=\"age\">$updated</td></tr>"
+  ROWS+="<td class=\"who\">$actor</td><td class=\"desc\">$desc</td><td class=\"age\">$updated</td></tr>$DETAIL"
 done
 
 # What the agents have actually DONE — from git, the only honest source.
@@ -65,6 +88,12 @@ else
   NEXT="NOT SCHEDULED — work only moves when dispatch.sh is run by hand"
 fi
 STAMP="$(date '+%-d %b %Y, %H:%M')"
-sed -e "s|<!--ROWS-->|$ROWS|" -e "s|<!--MINE-->|$MINE|" -e "s|<!--TOTAL-->|$TOTAL|" \
-    -e "s|<!--STAMP-->|$STAMP|" -e "s|<!--ACTIVITY-->|$ACTIVITY|" -e "s|<!--LAST-->|$LAST|" -e "s|<!--NEXT-->|$NEXT|" "$HERE/board-template.html" > "$OUT"
+ROWS="$ROWS" ACTIVITY="$ACTIVITY" MINE="$MINE" TOTAL="$TOTAL" STAMP="$STAMP" \
+LAST="$LAST" NEXT="$NEXT" TPL="$HERE/board-template.html" OUTF="$OUT" python3 - <<'PYEOF'
+import os, pathlib
+t = pathlib.Path(os.environ['TPL']).read_text()
+for k in ('ROWS','ACTIVITY','MINE','TOTAL','STAMP','LAST','NEXT'):
+    t = t.replace(f'<!--{k}-->', os.environ.get(k, ''))
+pathlib.Path(os.environ['OUTF']).write_text(t)
+PYEOF
 echo "→ board written: $OUT  ($MINE of $TOTAL waiting on you)"
