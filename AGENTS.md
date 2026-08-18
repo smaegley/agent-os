@@ -57,6 +57,19 @@ expected to honor, not a wall that stops them.
 4. Record why the role exists in an ADR. Roles that only reformat other agents' output are
    negative value; the bar is a distinct tool scope or a distinct model need.
 
+## Service identities — not agents
+
+Some things post to Slack that are not agents. They carry a name so their messages are visibly
+machine-originated rather than appearing to come from Todd or from an agent that reasoned about
+them — but they hold no model, make no judgements, and **must never be assigned work**.
+
+| Name | Unix user | What it is | Grant |
+|---|---|---|---|
+| **Evan** | `slack-bridge` | The inbound Slack bridge (WR-005). Receives, checks the sender ID against `slack-authz`, files intake, replies. | `notify` only |
+
+If you find yourself wanting to route a work item to a service identity, the item needs an agent
+or a person, not a service.
+
 ## Work item states
 
 The dispatcher routes on these tokens. They were **not** published when the first work items
