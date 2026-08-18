@@ -18,4 +18,5 @@
 /etc/systemd/system/slack-bridge.service	slack-bridge	systemd/slack-bridge.service
 /etc/systemd/system/slack-bridge-relay.path	slack-bridge	systemd/slack-bridge-relay.path
 /etc/systemd/system/slack-bridge-relay.service	slack-bridge	systemd/slack-bridge-relay.service
-/usr/local/bin/intake	slack-bridge	deploy/intake
+/usr/local/bin/intake	slack-bridge	deploy/intake-wrapper
+/usr/local/lib/intake/intake	slack-bridge	deploy/intake
