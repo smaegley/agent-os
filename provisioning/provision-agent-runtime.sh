@@ -72,8 +72,27 @@ sudo -u "$AGENT" chmod 755 "/home/$AGENT/bin/prod"
 
 # --- workspace --------------------------------------------------------------
 sudo -u "$AGENT" install -d -m 755 "/home/$AGENT/work"
-for repo in agent-os program; do
-  src="$SUBSTRATE"; [ "$repo" = program ] && src="$STATE"
+# Project CODE repos, not just the substrate and the record. WR-006 stalled
+# because Eric was dispatched to verify slack-bridge and had no clone of it:
+# every criterion needed the source, `~/work/slack-bridge` did not exist, and he
+# correctly refused to infer a verdict. Randal and Ken had clones only because
+# they are in the `proxdash` group; QA was never given one at all.
+#
+# Cloned from the LOCAL BARE repo, so write access stays governed by group
+# membership rather than by handing out a key: an agent outside `proxdash` gets
+# a working read-only clone — pull yes, push rejected — which is exactly QA's
+# boundary. Verified by attempting a real push as eric, not inferred from a
+# dry-run that reported "everything up-to-date" because it had nothing to send.
+PROJECT_REPOS=""
+for bare in /srv/git/*.git; do
+  [ -d "$bare" ] || continue
+  PROJECT_REPOS="$PROJECT_REPOS $(basename "$bare" .git)"
+done
+
+for repo in agent-os program $PROJECT_REPOS; do
+  src="$SUBSTRATE"
+  [ "$repo" = program ] && src="$STATE"
+  case " $PROJECT_REPOS " in *" $repo "*) src="/srv/git/$repo.git" ;; esac
   if [ ! -d "/home/$AGENT/work/$repo" ]; then
     git clone -q "$src" "/tmp/_seed_$repo"
     sudo cp -rT "/tmp/_seed_$repo" "/home/$AGENT/work/$repo"
@@ -87,9 +106,14 @@ for repo in agent-os program; do
       # whatever skills existed that day — which is exactly what happened.
       sudo -u "$AGENT" git -C "/home/$AGENT/work/$repo" remote set-url origin /opt/agent-os.git
       sudo -u "$AGENT" bash -c "cd /tmp && git config --global --add safe.directory /opt/agent-os.git"
-    else
+    elif [ "$repo" = program ]; then
       sudo -u "$AGENT" git -C "/home/$AGENT/work/$repo" \
            remote set-url origin "git@github.com:smaegley/$repo.git"
+    else
+      # Local bare project repo — no key to mint, no deploy key to revoke.
+      sudo -u "$AGENT" git -C "/home/$AGENT/work/$repo" \
+           remote set-url origin "/srv/git/$repo.git"
+      sudo -u "$AGENT" bash -c "cd /tmp && git config --global --add safe.directory /srv/git/$repo.git"
     fi
   fi
 done
