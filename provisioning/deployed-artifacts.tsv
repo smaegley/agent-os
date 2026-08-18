@@ -20,3 +20,7 @@
 /etc/systemd/system/slack-bridge-relay.service	slack-bridge	systemd/slack-bridge-relay.service
 /usr/local/bin/intake	slack-bridge	deploy/intake-wrapper
 /usr/local/lib/intake/intake	slack-bridge	deploy/intake
+/usr/local/bin/intake-queue	slack-bridge	deploy/intake-queue
+/usr/local/sbin/slack-bridge-intake-runner	slack-bridge	deploy/slack-bridge-intake-runner
+/etc/systemd/system/slack-bridge-intake-runner.path	slack-bridge	systemd/slack-bridge-intake-runner.path
+/etc/systemd/system/slack-bridge-intake-runner.service	slack-bridge	systemd/slack-bridge-intake-runner.service
