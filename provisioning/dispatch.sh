@@ -32,6 +32,20 @@ set -uo pipefail
 # picking up the same item invoke the same agent twice on the same work, which
 # is how WR-001 acquired two parallel pairs of commits for one verdict. Eric
 # caught it and said so; without the lock it would recur every long run.
+# --- working hours, decided here rather than by cron ---------------------------
+# cron on this box runs in UTC and ignores CRON_TZ (that is a cronie feature;
+# Debian/Ubuntu vixie-cron treats it as an env var for the job). A window
+# expressed in crontab hours was therefore UTC no matter what it claimed. This
+# guard resolves the zone at run time, so it is right through DST changes too.
+WORK_TZ="${WORK_TZ:-America/Denver}"
+WORK_START="${WORK_START:-7}"; WORK_END="${WORK_END:-20}"   # inclusive start, inclusive last hour
+if [ "${IGNORE_HOURS:-0}" != "1" ]; then
+  now_h="$(TZ="$WORK_TZ" date +%-H)"
+  if [ "$now_h" -lt "$WORK_START" ] || [ "$now_h" -gt "$WORK_END" ]; then
+    exit 0        # outside working hours — silent, this runs every 15 minutes
+  fi
+fi
+
 LOCK=/tmp/maegley-dispatch.lock
 exec 9>"$LOCK"
 flock -n 9 || { echo "dispatch: another run holds the lock — skipping"; exit 0; }

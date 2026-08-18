@@ -17,6 +17,13 @@
 
 set -uo pipefail
 
+# Same reason as dispatch.sh: cron here is UTC and ignores CRON_TZ. The digest
+# must land in Steve's morning, not at 00:30 his time.
+if [ "${IGNORE_HOURS:-0}" != "1" ]; then
+  [ "$(TZ="${WORK_TZ:-America/Denver}" date +%-H%M)" -ge 630 ] || exit 0
+  [ "$(TZ="${WORK_TZ:-America/Denver}" date +%-H)" -le 7 ] || exit 0
+fi
+
 REPO="${PROGRAM_REPO:-/home/steve/maegley-lab/program}"
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/maegley"
 STATE="$STATE_DIR/sweep-last-sha"
