@@ -37,7 +37,7 @@ case "$AGENT" in
   randal)  NAME="Randal";  ICON=":hammer_and_wrench:" ;;  # DEV
   andrea)  NAME="Andrea";  ICON=":eyes:"         ;;  # UAT
   ken)     NAME="Ken";     ICON=":electric_plug:" ;;  # Hardware
-  slack-bridge) NAME="Evan"; ICON=":inbox_tray:" ;;  # the Slack bridge SERVICE — not an agent
+  slack-bridge) NAME="Maegley Bridge"; ICON=":inbox_tray:" ;;  # the Slack bridge SERVICE — not an agent
   steve|root) NAME="Todd"; ICON=":gear:"         ;;  # Ops
   *) echo "notify: '$AGENT' is not a registered agent (see AGENTS.md)" >&2; exit 77 ;;
 esac
