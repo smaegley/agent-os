@@ -64,7 +64,14 @@ fm() { sed -n '2,/^---$/p' "$2" | grep -E "^$1:" | head -1 | cut -d: -f2- | xarg
 route() {
   case "$1" in
     new)            echo theresa ;;                       # BA writes the spec
-    spec-ready)     [ "$2" = true ] && echo john || echo randal ;;
+    # $2=infra, $4=needs_adr. 'infra' was doing double duty as "needs an
+    # architect", and WR-006 proved those are different: it is infra:false but
+    # introduces a NEW AUTHORITY (a credential that writes to `program`), which
+    # is squarely an architecture decision. The BA could say so in prose but had
+    # no way to say so in front matter, so she set owner:john — which the state
+    # machine then rejected as a contradiction and escalated as a typo. The item
+    # sat undispatched for hours with nothing erroring. Make it declarable.
+    spec-ready)     { [ "$2" = true ] || [ "$4" = true ]; } && echo john || echo randal ;;
     design-ready)   echo randal ;;
     env-needed)     echo ken ;;                           # build/refresh a test environment
     token-needed)   echo "" ;;                            # a credential only Todd can mint → stops
@@ -78,6 +85,10 @@ route() {
     # infer a verdict from source, he writes the exact commands and Todd executes
     # them — Eric still never built it and still never guesses. Stops for Steve.
     needs-exec)     echo "" ;;
+    # Steve parked it deliberately. Distinct from needs-exec: that means "waiting
+    # on Steve to run something", this means "Steve has decided nobody works it
+    # yet". Conflating them made the board demand 127 commands he had shelved.
+    hold)           echo "" ;;
     qa-passed)      [ "$3" = true ] && echo andrea || echo "" ;;
     uat-passed)     echo "" ;;                            # → Steve approves deploy
     *)              echo "UNKNOWN" ;;
@@ -85,7 +96,7 @@ route() {
 }
 
 # States the machine deliberately stops on. Anything else is a mistake, not a decision.
-KNOWN_TERMINAL="needs-exec token-needed qa-passed uat-passed accepted done"
+KNOWN_TERMINAL="needs-exec token-needed qa-passed uat-passed accepted done hold"
 
 ROUTED=""; STOPPED=""; BLOCKED=""; UNPROVISIONED=""; n=0
 
@@ -113,7 +124,8 @@ for f in $ORDERED; do
     BLOCKED+="  $id [$proj] — blocked, needs Steve"$'\n'; continue
   fi
 
-  who="$(route "$state" "${infra:-false}" "${uf:-false}")"
+  adr="$(fm needs_adr "$f")"
+  who="$(route "$state" "${infra:-false}" "${uf:-false}" "${adr:-false}")"
   if [ "$who" = UNKNOWN ]; then
     case " $KNOWN_TERMINAL " in
       *" $state "*) STOPPED+="  $id [$proj] state=$state — stops here by design"$'\n' ;;

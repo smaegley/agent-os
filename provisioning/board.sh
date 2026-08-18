@@ -26,6 +26,7 @@ meaning() { case "$1" in
   qa-passed)    echo "You|1|verified — awaiting your approval to deploy" ;;
   uat-passed)   echo "You|1|user-tested — awaiting your approval to deploy" ;;
   blocked)      echo "You|1|stuck — needs a decision or access from you" ;;
+  hold)         echo "—|0|on hold — you parked it; no agent will pick it up" ;;
   *)            echo "—|0|$1" ;;
 esac; }
 
@@ -36,6 +37,12 @@ for f in projects/*/*.md; do
   st="$(fm state "$f")"; proj="$(fm project "$f")"; own="$(fm owner "$f")"
   title="$(grep -m1 '^# ' "$f" | sed 's/^# *//;s/Work request — //' | cut -c1-78)"
   IFS='|' read -r actor mine desc <<<"$(meaning "$st")"
+
+  # A held item should say what it is waiting on, or 'hold' reads as 'forgotten'.
+  if [ "$st" = hold ]; then
+    hr="$(fm hold_reason "$f")"
+    [ -n "$hr" ] && desc="on hold — $hr"
+  fi
 
   # Live overrides durable: a running marker means an agent is on it right now.
   RUNMARK="/home/steve/.local/state/maegley/running.d/$id"
