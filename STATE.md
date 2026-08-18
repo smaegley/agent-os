@@ -1,4 +1,4 @@
-# State of the program — 2026-08-18
+# State of the program — 2026-08-18 (end of day)
 
 Current-state handoff. `ROLLOUT.md` describes the original Phase A–D plan and is now historical;
 **this file is what is true.** Written so a fresh session can pick up from the repos rather than
@@ -30,11 +30,13 @@ Seven identities, each a Unix user on codex-ops (LXC 301) with its own credentia
 | Randal | `randal` | Developer | read-only via `dev-readonly.sh` |
 | Eric | `eric` | QA | read-only via `qa-verify.sh` — a **different** key from Randal's |
 | Andrea | `andrea` | UAT | none, by design |
-| *Evan* | `slack-bridge` | **service identity, not an agent** | `notify` only |
+| *Maegley Bridge* | `slack-bridge` | **service identity, not an agent** | writes two queue dirs; no sudo |
+| *intake* | `intake` | **service identity, not an agent** | holds the `program` deploy key; create-only |
 
-**Credential rule, applied five times:** root holds the secret, a wrapper mediates, the agent
+**Credential rule, applied seven times:** root holds the secret, a wrapper mediates, the agent
 never sees it. Slack bot token, Proxmox API token, prod SSH keys, the authorized Slack identity,
-and the bridge's reply path all follow it.
+the bridge's reply path, and the `program` deploy key all follow it. The bridge can read none of
+them.
 
 ## Scheduled
 
@@ -49,8 +51,12 @@ Live board: **http://10.0.1.128:8088/maegley-lab-board.html**
 
 ## Running services
 
-- `slack-bridge` — Socket Mode, unprivileged, fully hardened, holds no Slack credential
-- `slack-bridge-relay.path` — root side of the privilege split; posts replies as Evan
+- `slack-bridge` — Socket Mode, unprivileged, fully hardened, holds no Slack credential.
+  **Cannot `sudo` to anything** — `NoNewPrivileges` plus seven settings that each imply it. Two
+  ADRs were written assuming otherwise before this was designed around.
+- `slack-bridge-relay.path` — root side of the reply split; posts as **Maegley Bridge** (ADR-0005)
+- `slack-bridge-intake-runner.path` — root side of the intake split; drains the intake-inbox and
+  runs `intake` via `runuser`, never `sudo` (ADR-0006)
 - `maegley-board` — serves the board on :8088
 - Proxmox dashboard — VMID 900 `test-pvedash` @ **10.0.1.117:8080** (test env, disposable)
 
@@ -58,28 +64,73 @@ Live board: **http://10.0.1.128:8088/maegley-lab-board.html**
 
 | Item | State | Owner | Note |
 |---|---|---|---|
-| WR-001 | `needs-exec` | Todd | config-sync apply; Randal's rsync fix in, retry not run |
-| WR-002 | `needs-exec` | Todd | LVM thin-pool guard; Steve approved applying it |
-| WR-003 | `needs-exec` | Todd | ha-triage verification; Steve approved finishing it |
-| WR-004 | with Eric | Eric | dashboard; backup limit accepted by Steve as-is |
-| WR-005 | open: R6, R8 | Eric | bridge live and working; R6 unproven |
-| WR-006 | `new` | — | status answers, question answers, real pipeline intake |
+| WR-001 | `hold` | — | config-sync apply. Parked by Steve behind 005/006 |
+| WR-002 | `hold` | — | LVM thin-pool guard. Parked |
+| WR-003 | `hold` | — | ha-triage verification. Parked |
+| WR-004 | `hold` | — | dashboard POC. Parked, verification deferred not waived |
+| WR-005 | `qa-ready` | Eric | reply path PASS; **R6 ran and passed** — awaiting Eric's re-verdict |
+| WR-006 | `qa-ready` | Eric | **intake works** — created and pushed a real WR-008 |
+| WR-007 | `hold` | — | record↔code link; misfiled migraine spec in ha-ops |
+| WR-008 | `new` | Theresa | **first item ever raised from Slack.** Awaiting elicitation |
+| WR-009 | `new` | — | event-driven dispatch; replaces 15-min batching |
 
 ## Open decisions for Steve
 
-1. **PROCESS.md step 9** — "Eric deploys to prod". Flagged four times, still unanswered. Giving
-   QA deploy keys undercuts the independence that makes his verdicts worth having. Recommendation:
-   Eric certifies, ops deploys.
-2. **WR-005 R6** — needs a second Slack account. "Only Steve can command it" is currently proven
-   positively and against content attacks, never negatively.
+1. **PROCESS.md step 9** — "Eric deploys to prod". Flagged five times, still unanswered.
+   Recommendation: Eric certifies, ops deploys.
+2. **WR-005 gate 2** — accept WR-005 as transport-only, or hold it open until the capability
+   lands. **The capability landed tonight**, so this is now a live decision rather than
+   hypothetical.
+3. **Prod SSH under the harness.** PROCESS.md rule 1 says Steve is never handed raw shell
+   commands, but the auto-mode classifier blocks the operator from executing the prod half, so
+   every `needs-exec` item hands Steve a paste buffer. This is a harness-config decision, not a
+   credential one. Matters again the moment the ha-ops hold lifts — WR-001's T-6 is the first real
+   `--apply` against the config mirror.
 
 ## What is genuinely not built
 
-- **Inbound intake that creates work items.** The bridge records to a spool and replies; it does
-  not create `WR-xxx` items. That is WR-006.
-- **Status and question answering.** Same.
-- A check that the dispatcher itself is healthy. It failed silently for hours twice (a syntax
-  error, then a timezone window) and both times the only symptom was nothing happening.
+- **Status and question answering** over Slack (WR-006 criteria 3–9). Intake works; these are a
+  separate increment and were never in the dispatched scope.
+- **A check that the dispatcher itself is healthy.** It failed silently for hours twice. Still
+  unbuilt, and **WR-009 must not ship without it** — an event-driven dispatcher that dies looks
+  exactly like an idle queue.
+- **A spec/ADR ↔ code link.** `deployed-artifacts.tsv` asserts running bytes == committed bytes for
+  binaries. Nothing asserts which repo a `projects/<n>/` record governs — that is WR-007.
+
+## What changed on 2026-08-18 (the day the bridge went end to end)
+
+**The state machine gained three things, each because a real item could not move and nothing
+errored:**
+
+- `hold` — Steve parks an item. Distinct from `needs-exec`, which is a request *of* Steve. Before
+  this, four parked items rendered as 127 outstanding commands he owed.
+- `needs_adr:` front-matter flag — `infra` was doing double duty as "needs an architect". WR-006 is
+  `infra:false` but introduced a new authority; the machine called Theresa's correct `owner: john`
+  a contradiction and refused to dispatch. It sat untouched for hours.
+- `adr-needed` state — built, running, and its design record is wrong. Eric had only `blocked` to
+  reach for, and `blocked` means "needs Steve" and **ignores owner**, so his `owner: john` was
+  inert. Used twice; both times John was dispatched and fixed the ADR.
+
+**`doctor.sh` gained the check that would have caught the day's worst finding:**
+
+- A **deployed-artifact inventory** (`provisioning/deployed-artifacts.tsv`) comparing running bytes
+  to committed bytes for 13 host components. A dirty-tree check structurally cannot catch code that
+  lives outside every working tree.
+- It now checks **the operator too**. Every prior loop iterated agent identities; Todd was never
+  examined — and it was the operator who left production uncommitted.
+- It caught, on separate runs: four unrecorded relay components, a `NoNewPrivileges` divergence
+  nobody found by hand, a stale substrate mirror, and host-ahead-of-repo drift.
+
+**Provisioning gained project code repos.** `provision-agent-runtime.sh` had only ever cloned
+`agent-os` and `program`. Eric was dispatched to verify `slack-bridge` and had no clone of it;
+Randal and Ken had one only via `proxdash` group membership. Now every local bare repo is cloned,
+with write access still governed by group membership — so QA gets a working read-only clone.
+
+**The Slack bridge became real.** Replies post as **Maegley Bridge** through the ADR-0005
+outbox→relay split; intake creates a real pushed `WR-xxx` through the ADR-0006 inbox→runner split.
+Neither path uses `sudo` — the service cannot elevate at all, which was disproved twice the hard
+way before it was designed around. **`WR-008` is the first work item ever created by Steve talking
+to Slack.**
 
 ## The recurring bug, for whoever comes next
 
