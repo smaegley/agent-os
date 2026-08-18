@@ -21,7 +21,10 @@ meaning() { case "$1" in
   new)          echo "Theresa|0|queued — needs requirements written" ;;
   spec-ready)   echo "John|0|queued — spec written, awaiting design decision" ;;
   design-ready) echo "Randal|0|queued — design recorded, awaiting build" ;;
-  qa-ready)     echo "Eric|0|queued — built, awaiting independent verification" ;;
+  # 'qa-prep' and 'built' are the agents' own tokens — dispatch.sh already routes
+  # all three to Eric. The board knew only 'qa-ready', so a real state rendered as
+  # a bare word with no owner and no meaning.
+  qa-ready|qa-prep|built) echo "Eric|0|queued — built, awaiting independent verification" ;;
   needs-exec)   echo "You|1|QA wrote commands it cannot run — you or Todd execute" ;;
   qa-passed)    echo "You|1|verified — awaiting your approval to deploy" ;;
   uat-passed)   echo "You|1|user-tested — awaiting your approval to deploy" ;;
