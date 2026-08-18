@@ -27,6 +27,7 @@ meaning() { case "$1" in
   uat-passed)   echo "You|1|user-tested — awaiting your approval to deploy" ;;
   blocked)      echo "You|1|stuck — needs a decision or access from you" ;;
   hold)         echo "—|0|on hold — you parked it; no agent will pick it up" ;;
+  adr-needed)   echo "John|0|queued — built, but its design record needs correcting" ;;
   *)            echo "—|0|$1" ;;
 esac; }
 

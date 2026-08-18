@@ -89,6 +89,13 @@ route() {
     # on Steve to run something", this means "Steve has decided nobody works it
     # yet". Conflating them made the board demand 127 commands he had shelved.
     hold)           echo "" ;;
+    # Built, running, and its design record is wrong. Eric hit this on WR-005 and
+    # had only 'blocked' to reach for -- but 'blocked' means "needs Steve" and
+    # ignores owner entirely, so his `owner: john` was inert and the item would
+    # have escalated to Steve every 15 minutes while John was never dispatched.
+    # QA cannot verdict against a superseded ADR, and that is the architect's to
+    # fix, not Steve's to arbitrate.
+    adr-needed)     echo john ;;
     qa-passed)      [ "$3" = true ] && echo andrea || echo "" ;;
     uat-passed)     echo "" ;;                            # → Steve approves deploy
     *)              echo "UNKNOWN" ;;
