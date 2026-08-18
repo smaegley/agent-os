@@ -1,0 +1,21 @@
+# deployed-artifacts.tsv — what runs on this host, and where its source is recorded.
+#
+# WHY THIS FILE EXISTS: on 2026-08-18 the production Slack reply path — four
+# root-owned components — ran for hours while existing in NO repository. git
+# status was clean in every clone, because the files lived in /usr/local/sbin and
+# /etc/systemd/system, outside any working tree. QA had nothing to inspect and
+# blocked. A dirty-tree check cannot catch that class; only an inventory can.
+#
+# Format:  <host path> <TAB> <repo key> <TAB> <path within that repo>
+# Repo keys resolve to bare repos in doctor.sh (the record, not a working copy).
+# A line here is a CLAIM that the host file must byte-match the committed source.
+# Add a line the moment you install something; that is the whole point.
+
+/usr/local/bin/notify	agent-os	provisioning/notify
+/usr/local/bin/provision-env	agent-os	provisioning/provision-env
+/usr/local/bin/notify-queue	slack-bridge	deploy/notify-queue
+/usr/local/sbin/slack-bridge-relay	slack-bridge	deploy/slack-bridge-relay
+/etc/systemd/system/slack-bridge.service	slack-bridge	systemd/slack-bridge.service
+/etc/systemd/system/slack-bridge-relay.path	slack-bridge	systemd/slack-bridge-relay.path
+/etc/systemd/system/slack-bridge-relay.service	slack-bridge	systemd/slack-bridge-relay.service
+/usr/local/bin/intake	slack-bridge	deploy/intake

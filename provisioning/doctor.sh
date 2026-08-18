@@ -60,7 +60,7 @@ for a in $(agent_list); do
   fi
 
   # --- unpushed work is invisible work -------------------------------------
-  for r in program ha-ops agent-os; do
+  for r in program ha-ops agent-os slack-bridge proxmox-dashboard; do
     sudo -n test -d "/home/$a/work/$r/.git" || continue
     dirty="$(agent_git "$a" "$r" status --porcelain 2>/dev/null | wc -l)"
     ahead="$(agent_git "$a" "$r" status -sb 2>/dev/null | grep -o 'ahead [0-9]*' || true)"
@@ -68,6 +68,55 @@ for a in $(agent_list); do
     [ -n "$ahead" ]   && bad "$a" "$r is $ahead — work nobody else can see"
   done
 done
+
+
+# --- the operator is not exempt ------------------------------------------
+# Every check above loops over AGENT identities. Todd's own trees were never
+# looked at — and on 2026-08-18 it was the operator, not an agent, who left the
+# production reply path uncommitted. A doctor that watches only the supervised
+# half reports "all invariants hold" while the supervisor is the one adrift.
+echo
+for t in /home/steve/maegley-lab/program /home/steve/maegley-lab/agent-os \
+         /home/steve/work/slack-bridge /home/codex/ha; do
+  [ -d "$t/.git" ] || continue
+  n="$(basename "$t")"
+  dirty="$(git -C "$t" status --porcelain 2>/dev/null | wc -l)"
+  ahead="$(git -C "$t" status -sb 2>/dev/null | grep -o 'ahead [0-9]*' || true)"
+  [ "$dirty" != 0 ] && bad "todd" "$n has $dirty uncommitted file(s)" || true
+  [ -n "$ahead" ]   && bad "todd" "$n is $ahead — work nobody else can see" || true
+  { [ "$dirty" = 0 ] && [ -z "$ahead" ]; } && ok "todd" "$n clean and pushed" || true
+done
+
+# --- what RUNS must exist in the record ----------------------------------
+# The check that would have caught the slack-bridge relay. A dirty-tree check
+# cannot: those files live outside every working tree, so git status is clean
+# and honest while production is unrecorded. Compare the running bytes against
+# the committed bytes instead — the only question that actually matters.
+echo
+MANIFEST="$HERE/deployed-artifacts.tsv"
+declare -A RECORD=( [agent-os]=/opt/agent-os.git \
+                    [slack-bridge]=/srv/git/slack-bridge.git \
+                    [proxmox-dashboard]=/srv/git/proxmox-dashboard.git )
+if [ ! -f "$MANIFEST" ]; then
+  bad "deploy" "no deployed-artifacts.tsv — nothing asserts that what runs is recorded"
+else
+  while IFS=$'\t' read -r hostpath key repopath; do
+    case "${hostpath:-}" in ''|\#*) continue ;; esac
+    [ -n "${repopath:-}" ] || { bad "deploy" "malformed manifest line: $hostpath"; continue; }
+    gd="${RECORD[$key]:-}"
+    [ -n "$gd" ] || { bad "deploy" "$hostpath names unknown repo key '$key'"; continue; }
+    sudo -n test -e "$hostpath" 2>/dev/null || { ok "deploy" "$(basename "$hostpath") not installed here"; continue; }
+    live="$(sudo -n sha256sum "$hostpath" 2>/dev/null | cut -d" " -f1)"
+    rec="$(git --git-dir="$gd" show "HEAD:$repopath" 2>/dev/null | sha256sum | cut -d" " -f1)"
+    if [ -z "$rec" ] || ! git --git-dir="$gd" cat-file -e "HEAD:$repopath" 2>/dev/null; then
+      bad "deploy" "$hostpath RUNS BUT IS IN NO REPO ($key:$repopath missing) — nothing to inspect"
+    elif [ "$live" = "$rec" ]; then
+      ok "deploy" "$(basename "$hostpath") matches $key:$repopath"
+    else
+      bad "deploy" "$hostpath DIFFERS from $key:$repopath — host and record disagree"
+    fi
+  done < "$MANIFEST"
+fi
 
 echo
 if [ "$FAIL" = 0 ]; then
