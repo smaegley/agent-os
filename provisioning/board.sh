@@ -45,6 +45,16 @@ for f in projects/*/*.md; do
   title="$(grep -m1 '^# ' "$f" | sed 's/^# *//;s/Work request — //' | cut -c1-78)"
   IFS='|' read -r actor mine desc <<<"$(meaning "$st")"
 
+  # needs-exec is a request of whoever OWNS it. PROCESS.md rule 1 is explicit —
+  # "Todd executes; Steve is never handed raw shell commands" — and Eric routes
+  # these to todd by default. meaning() sees only the state, so the board counted
+  # every needs-exec item against Steve and told him it was his move. That
+  # inverted the rule on the one surface he actually reads, and he had to ask.
+  if [ "$st" = needs-exec ] && [ "$own" != steve ]; then
+    actor="$(tr a-z A-Z <<<"${own:0:1}")${own:1}"; mine=0
+    desc="QA wrote commands it cannot run — ${actor} executes"
+  fi
+
   # A held item should say what it is waiting on, or 'hold' reads as 'forgotten'.
   if [ "$st" = hold ]; then
     hr="$(fm hold_reason "$f")"
