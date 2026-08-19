@@ -1,0 +1,142 @@
+EVENT-DRIVEN DISPATCH — implementer's notes, design-detail values, and the operator runbook
+WR-009 / ADR-0001. Build by Randal. Spec: program projects/agent-os/spec/event-driven-dispatch.md
+ADR:  program projects/agent-os/decisions/ADR-0001-event-driven-dispatch-trigger-and-concurrency.md
+
+Not a .md file on purpose: agent-os denies agent writes to *.md. This is a plain-text runbook that
+lives with the code it documents.
+
+===============================================================================================
+1. WHAT WAS BUILT
+===============================================================================================
+Files added / changed in provisioning/ :
+
+  lib-dispatch.sh      NEW  single source of truth for routing (route(), verbatim from the batch)
+                            plus the cross-process serialized dispatch primitive (dispatch_one),
+                            the guards (per-item marker, per-agent mutex, in-flight cap, dispatch
+                            record), marker reaping, record pruning, and heartbeat paths.
+  dispatch.sh          MOD  no longer the 15-min primary; now the reconcile SWEEP + health prober.
+                            Routing/ordering/reporting unchanged; the whole-run flock+wait and the
+                            inline dispatch block are replaced by calls to the shared primitive so
+                            it shares guards with the watcher. Still cron-safe during cutover.
+  watch-dispatch.sh    NEW  the long-lived watcher: ls-remote poll of origin's ref, high-water
+                            mark, fetch-on-movement, diff transitioned items, dispatch via the
+                            shared path. Heartbeat + systemd watchdog each loop.
+  dispatch-health.sh   NEW  the fail-loud ship gate: ages the heartbeat out, alerts #ops-prod on
+                            the healthy->down edge. Quiet until the watcher is actually deployed.
+  systemd/maegley-dispatch-watch.service        NEW  the watcher unit (Type=notify, WatchdogSec).
+  systemd/maegley-dispatch-reconcile.service    NEW  the sweep+health (oneshot).
+  systemd/maegley-dispatch-reconcile.timer      NEW  fires the sweep every 5 min.
+
+===============================================================================================
+2. DESIGN-DETAIL VALUES  (ADR §7 left these to the implementer; chosen here, all ENV-overridable)
+===============================================================================================
+  POLL_INTERVAL      = 10 s     new latency floor; ADR §6 recommended ~10-15 s. Idle cost is one
+                                `git ls-remote` ref query per interval, no item reads, no fetch.
+  reconcile interval = 5 min    OnUnitActiveSec in the .timer. Worst-case recovery of a fully
+                                missed transition and worst-case dead-watcher detection are both
+                                ~one interval.
+  MAX_INFLIGHT       = 2        the MAX_DISPATCH=2 cascade cap, re-expressed as a system-wide
+                                in-flight cap (count of fresh running.d markers).
+  AGENT_TIMEOUT      = 1800 s   confirmed against dispatch.sh L55 (unchanged).
+  MARKER_TTL         = 1800 s   = AGENT_TIMEOUT. A running.d marker older than this is a crash
+                                orphan (agent killed before its EXIT-trap cleanup) and is reaped by
+                                the sweep, so it cannot wedge an agent's mutex forever. The batch
+                                never needed this — its whole-run flock+wait cleaned up; the
+                                re-scoped lock does (ADR §3, Consequences).
+  HEARTBEAT_MAX_AGE  = 120 s    12x the poll interval; a live watcher heartbeats every ~10 s, so
+                                age exceeds this only when the watcher is actually dead.
+  RECORD_TTL_DAYS    = 7        dispatched.d records pruned after this to bound growth.
+
+State lives under MAEGLEY_STATE (default /home/steve/.local/state/maegley — where running.d
+already is):  running.d/<id>  dispatched.d/<id>  watch-last-commit  watch-heartbeat
+watch-health-last.
+
+===============================================================================================
+3. HOW THE GUARANTEES SURVIVE WITHOUT "RUNS"  (maps to spec §6 / ADR §2-3)
+===============================================================================================
+  one action at a time  -> dispatch_one takes flock on /tmp/maegley-dispatch.lock for the DECISION
+                           only (not the agent run), so the watcher is never blocked behind a
+                           30-min agent. Watcher, sweep, and cutover cron all serialize on it.
+  per-agent mutex       -> before dispatching A, under the lock, refuse if any fresh running.d
+                           marker is owned by A. Marker written under the lock; removed on
+                           completion/timeout. running.d is BOTH the board's truth and the mutex,
+                           so they cannot drift.
+  cascade cap           -> under the lock, refuse if fresh-marker count >= MAX_INFLIGHT.
+  no self-trigger       -> dispatched.d/<id> holds the last-dispatched state; a transition already
+                           dispatched is a no-op until the item moves to a different state. An
+                           agent committing its own state change + evidence therefore dispatches
+                           the NEXT step exactly once and never re-dispatches itself.
+  debounce              -> falls out of the above: several commits for one logical transition are
+                           all at/<= the fetched tip, so the item's resulting state is evaluated
+                           once; a straggler across polls hits the dispatch record.
+  write-during-read     -> the watcher reads git OBJECTS at a fixed pushed SHA, never a live
+                           working tree. Concurrent pushes only advance origin to a new tip.
+  crux (origin vs local)-> the watcher keys off origin's ref (ls-remote) and reads AT the pushed
+                           tip. An unpushed local edit never advances the ref, never dispatches.
+  terminal states       -> route() returns "" for them (unchanged); no dispatch, no re-fire.
+  no missed item        -> the reconcile sweep (5 min) re-evaluates every item and feeds the same
+                           idempotent path, so anything the event path dropped is recovered.
+  dead != idle          -> dispatch-health.sh, run by the sweep OUTSIDE the watcher, distinguishes
+                           them and alerts fail-loud. Plus WatchdogSec/Restart=always self-heal.
+
+===============================================================================================
+4. CUTOVER  (ADR §6: shadow -> parallel -> retire cron; NEVER a hard swap)
+     Provisioning is the operator's, prod-touching, on Steve's plain-language yes/no. Randal has
+     installed nothing and enabled nothing. These are the steps Eric's run-request / the operator
+     execute on the host. Substrate reaches the host via Todd's merge + publish-substrate.sh.
+===============================================================================================
+Pre:  copy the two .service + one .timer from provisioning/systemd/ into /etc/systemd/system/ ,
+      set User= to the current dispatch cron user (confirm with `crontab -l`), `daemon-reload`.
+
+STAGE 0  reconcile only, prove parity of the refactor.
+  - Leave the 15-min dispatch cron AS IS (it now runs the refactored dispatch.sh via substrate).
+  - Do NOT enable the watcher yet.
+  - Confirm the refactored dispatch.sh dispatches exactly as before (DRY_RUN=1 plan matches; a real
+    off-boundary transition still routes correctly). This validates the lib-dispatch.sh extraction
+    before any new moving part is introduced.
+
+STAGE 1  shadow (watcher observes, dispatches nothing).
+  - Drop-in for the watch service:  Environment=DISPATCH_SHADOW=1
+      systemctl edit maegley-dispatch-watch.service   (add [Service] Environment=DISPATCH_SHADOW=1)
+  - `systemctl enable --now maegley-dispatch-watch.service`
+  - The cron/sweep stays the sole real dispatcher. Success = the watcher's SHADOW would-dispatch
+    log lines (in log/dispatch.log) match the sweep's actual dispatches over a real window: same
+    items, same route() outcomes. Zero risk — the watcher writes no markers, no records, starts no
+    agent in shadow.
+
+STAGE 2  parallel (watcher dispatches for real; cron/sweep armed as backstop).
+  - Remove the DISPATCH_SHADOW drop-in; `systemctl restart maegley-dispatch-watch.service`.
+  - `systemctl enable --now maegley-dispatch-reconcile.timer`.
+  - KEEP the 15-min cron armed. Coexistence is safe by construction: whichever of {watcher, sweep,
+    cron} wins the flock and writes the running.d marker + dispatch record first dispatches; the
+    others no-op. Hold here until confident (watch log/dispatch.log; no double-dispatch; latency is
+    now the poll interval, not the quarter-hour).
+
+STAGE 3  retire cron as PRIMARY (keep the low-frequency reconcile).
+  - Remove ONLY the 15-min dispatch line from crontab. The reconcile .timer (5 min) keeps the
+    sweep as the backstop; the watcher is primary.
+  - The cron logic never left — it is the .timer's dispatch.sh at a different frequency.
+
+FALLBACK (tested at every stage before removing the cron, per spec §6.14):
+  - Re-arm: put the 15-min dispatch cron line back (*/15 07-20 * * * .../dispatch.sh) and
+    `systemctl disable --now maegley-dispatch-watch.service maegley-dispatch-reconcile.timer`.
+  - One config change. The system is exactly the batch it is today. Nothing else (routing, states,
+    agent boundaries, the board) was touched, so rollback harms nothing.
+
+===============================================================================================
+5. WHAT RANDAL COULD NOT VERIFY — FOR ERIC (spec §6.16, definition-of-done)
+===============================================================================================
+Randal wrote and syntax-checked this code but cannot run it against the live dispatcher (cannot
+push to the substrate; the running dispatcher is on the host). Per spec §6.16 the concurrency and
+liveness criteria (5-13) and the health ship gate (11) are ONLY honestly checkable against the
+running dispatcher, by the operator, output committed under program projects/agent-os/qa/ .
+Specifically Eric/operator to confirm on the host:
+  - the dispatch cron currently runs as the user assumed in User= (adjust the units if not);
+  - `sudo -n /usr/local/bin/notify` and `sudo -u <agent>` work as that user (they do for the batch);
+  - systemd-notify is present for Type=notify + WatchdogSec (util-linux/systemd);
+  - the carried batch facts (flock path, MAX_DISPATCH origin, AGENT_TIMEOUT=1800, running.d
+    location, terminal states) — all read from dispatch.sh at build time, re-confirm live;
+  - each acceptance criterion §6.1-16, especially 5 (no self-trigger), 6 (debounce), 7 (per-agent
+    mutex), 8 (cap), 9 (sweep backstop), 10 (crash recovery), 11 (health fires), 13 (origin-not-
+    local), 14 (safe cutover), by exercising the running system per the run-request protocol.
+This build claims NO acceptance criterion met.

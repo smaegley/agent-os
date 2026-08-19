@@ -1,0 +1,26 @@
+# maegley-dispatch-reconcile.timer — fires the backstop sweep + health probe (WR-009 / ADR-0001 §4).
+#
+# Low frequency by intent (ADR §6): frequent enough to bound worst-case
+# stranding and to catch a dead watcher promptly, infrequent enough not to
+# reintroduce the batching cost the watcher exists to remove.
+#
+#   Interval:            5 minutes  (OnUnitActiveSec below)
+#   Worst-case recovery: a transition the watcher entirely missed is dispatched
+#                        within one interval (~5 min) instead of never.
+#   Health latency:      a dead watcher is reported within one interval (~5 min).
+#
+# This replaces the *primary* 15-minute dispatch cadence. dispatch.sh's own
+# work-hours guard keeps it silent outside 07:00-20:00 local, exactly as the
+# batch was.
+
+[Unit]
+Description=Fire the Maegley dispatch reconcile sweep every 5 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+Persistent=false
+
+[Install]
+WantedBy=timers.target

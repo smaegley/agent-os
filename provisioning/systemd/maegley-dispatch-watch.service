@@ -1,0 +1,45 @@
+# maegley-dispatch-watch.service — the event-driven dispatch watcher (WR-009 / ADR-0001 §1,§5).
+#
+# The long-lived trigger: polls origin's record ref and dispatches transitions
+# through the serialized path in lib-dispatch.sh. Replaces the 15-minute cron as
+# the PRIMARY dispatcher; the reconcile .timer is the backstop behind it.
+#
+# INSTALL / CUTOVER is the operator's, prod-touching, on Steve's plain-language
+# yes/no (ADR §Out-of-scope). See provisioning/EVENT-DISPATCH.md for the staged
+# shadow -> parallel -> retire-cron rollout. In particular, stage 1 runs this in
+# SHADOW via a drop-in (Environment=DISPATCH_SHADOW=1) so it decides and logs but
+# dispatches nothing while the cron stays primary.
+#
+# CONFIRM BEFORE ENABLING (carried facts, ADR provenance): the User= below must
+# be whoever currently runs the dispatch cron — the identity that already writes
+# running.d and calls `sudo -n /usr/local/bin/notify` and `sudo -u <agent>`.
+# Confirm with `crontab -l` / the current dispatch setup; adjust User= to match.
+
+[Unit]
+Description=Maegley event-driven dispatch watcher
+Documentation=file:///home/steve/maegley-lab/agent-os/provisioning/EVENT-DISPATCH.txt
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+# Confirm this matches the current dispatch cron user before enabling.
+User=todd
+ExecStart=/home/steve/maegley-lab/agent-os/provisioning/watch-dispatch.sh
+Restart=always
+RestartSec=5
+# Self-healing layer (ADR §5): a hung loop that stops pinging the watchdog is
+# killed and restarted. The watcher pings once per poll (~10s); 60s is a wide
+# margin. The independent heartbeat-age alert (dispatch-health.sh) covers the
+# cases the watchdog cannot see (disabled/masked/wedged box).
+WatchdogSec=60
+# A detached agent (setsid) outlives a watcher restart — do not sweep the cgroup.
+KillMode=process
+# Design-detail knobs (ADR §7). Defaults live in lib-dispatch.sh; override here.
+# Environment=POLL_INTERVAL=10
+# Environment=MAX_INFLIGHT=2
+# Environment=PROGRAM_REPO=/home/steve/maegley-lab/program
+# Environment=MAEGLEY_STATE=/home/steve/.local/state/maegley
+
+[Install]
+WantedBy=multi-user.target

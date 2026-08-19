@@ -1,0 +1,30 @@
+# maegley-dispatch-reconcile.service — the backstop sweep + health prober (WR-009 / ADR-0001 §4,§5).
+#
+# Runs dispatch.sh: the batch's own read-every-item logic, kept but slowed. It
+# is triple-duty by design (ADR §4):
+#   1. Backstop dispatch — recovers any transition the watcher missed (dropped
+#      poll, restart, push during downtime). Feeds the SAME serialized path, so
+#      it can never double-dispatch what the watcher already handled.
+#   2. Independent health prober — it runs OUTSIDE the watcher process, so
+#      dispatch.sh calling dispatch-health.sh is exactly what tells "watcher
+#      dead" from "queue idle".
+#   3. Cutover fallback — this IS the cron's logic; re-arming the 15-minute cron
+#      and disabling the watcher is the tested rollback (ADR §6).
+#
+# oneshot: agents are started detached (setsid) inside dispatch_one, so this
+# returns in seconds and the timer fires reliably; systemd runs one instance at
+# a time, which naturally bounds the sweep to a singleton.
+#
+# CONFIRM User= as in maegley-dispatch-watch.service.
+
+[Unit]
+Description=Maegley dispatch reconcile sweep and watcher-health probe
+Documentation=file:///home/steve/maegley-lab/agent-os/provisioning/EVENT-DISPATCH.txt
+
+[Service]
+Type=oneshot
+User=todd
+ExecStart=/home/steve/maegley-lab/agent-os/provisioning/dispatch.sh
+KillMode=process
+# Environment=PROGRAM_REPO=/home/steve/maegley-lab/program
+# Environment=MAEGLEY_STATE=/home/steve/.local/state/maegley
