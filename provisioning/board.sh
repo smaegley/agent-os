@@ -30,7 +30,11 @@ meaning() { case "$1" in
   uat-passed)   echo "You|1|user-tested — awaiting your approval to deploy" ;;
   # First terminal state reached 2026-08-19 (WR-005). Nothing had ever finished
   # before, so 'done' had no rendering and would have shown as a bare word.
-  done|accepted) echo "—|0|complete — approved and closed" ;;
+  done)         echo "—|0|complete — QA verified, approved and closed" ;;
+  # NOT the same as 'done'. 'done' means QA verified it; 'accepted' means Steve
+  # closed it as-is without verification, knowingly. Rendering them identically
+  # would let an unverified item read as a QA-passed one later.
+  accepted)     echo "—|0|accepted as-is by you — closed WITHOUT QA verification" ;;
   blocked)      echo "You|1|stuck — needs a decision or access from you" ;;
   hold)         echo "—|0|on hold — you parked it; no agent will pick it up" ;;
   adr-needed)   echo "John|0|queued — built, but its design record needs correcting" ;;
