@@ -136,6 +136,13 @@ s['permissions'] = {
     "allow": [
         f"Write(//home/{agent}/work/program/**)",
         f"Edit(//home/{agent}/work/program/**)",
+        # Substrate TOOLING only — dispatch.sh, board.sh, doctor.sh, sweep.sh.
+        # Steve's ruling 2026-08-19 after WR-009 blocked: dispatch.sh lives in
+        # agent-os, so a blanket deny meant nobody in the org could improve the
+        # org's own machinery. Everything that defines what an agent IS stays
+        # denied below.
+        f"Write(//home/{agent}/work/agent-os/provisioning/**)",
+        f"Edit(//home/{agent}/work/agent-os/provisioning/**)",
         f"Bash(/home/{agent}/bin/prod *)",
         # Not per-subcommand: `git -C <dir> <sub>` does not match `git add *`,
         # and agents working across two repos use -C constantly. Real reach is
@@ -144,8 +151,19 @@ s['permissions'] = {
     ],
     "deny": [
         "Bash(sudo *)",
-        f"Write(//home/{agent}/work/agent-os/**)",
-        f"Edit(//home/{agent}/work/agent-os/**)",
+        # DENY WINS over allow. That is load-bearing here: this file sits inside
+        # the now-allowed provisioning/ directory, and it is the file that GRANTS
+        # these very permissions. If an agent could edit it, every other deny in
+        # this list would be advisory rather than real.
+        f"Write(//home/{agent}/work/agent-os/provisioning/provision-agent-runtime.sh)",
+        f"Edit(//home/{agent}/work/agent-os/provisioning/provision-agent-runtime.sh)",
+        # The rules themselves: skills, agent briefs, constitution, roster,
+        # PROCESS.md, STATE.md. An agent may improve the machinery it runs on,
+        # never the definition of what it is or what it is allowed to do.
+        f"Write(//home/{agent}/work/agent-os/plugins/**)",
+        f"Edit(//home/{agent}/work/agent-os/plugins/**)",
+        f"Write(//home/{agent}/work/agent-os/*.md)",
+        f"Edit(//home/{agent}/work/agent-os/*.md)",
     ],
 }
 p.parent.mkdir(parents=True, exist_ok=True)
