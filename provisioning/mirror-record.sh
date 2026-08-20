@@ -21,5 +21,5 @@ MIRROR=/srv/git/program.git
 [ -d "$MIRROR" ] || { echo "mirror-record: no mirror at $MIRROR" >&2; exit 1; }
 git --git-dir="$MIRROR" remote update --prune >/dev/null 2>&1 || {
   echo "mirror-record: fetch from GitHub failed" >&2; exit 1; }
-chmod -R g+rwX "$MIRROR" 2>/dev/null || true
+chmod -R a+rX "$MIRROR"; chmod -R g+rwX "$MIRROR" 2>/dev/null || true
 exit 0
