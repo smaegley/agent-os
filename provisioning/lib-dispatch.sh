@@ -197,8 +197,26 @@ start_agent() { # id file state who
   sudo -n /usr/local/bin/notify '#program' \
     "${who^} starting $id ($state → next step)" >/dev/null 2>&1 || true
 
+  # The session's working directory is `program`, so every SIBLING CLONE is
+  # outside the sandbox and unreachable — regardless of what settings.json
+  # allows. The prompt below tells the agent its code lives in those clones, so
+  # the instruction and the capability contradicted each other: Eric blocked on
+  # slack-bridge (2026-08-19), Randal on agent-os (2026-08-19), Randal on both
+  # (2026-08-20). Three blocks, one cause, patched individually twice before
+  # anyone looked at the class.
+  #
+  # Pass every clone the agent actually has as --add-dir. This grants TOOL REACH
+  # only; the Write/Edit allow+deny rules in the agent's settings.json still
+  # decide what may be modified, so the 2026-08-19 substrate boundary (agents may
+  # change the machinery, never the rules) is unaffected.
+  # Built INSIDE the agent's own shell: /home/<agent> is 0750 and the dispatcher
+  # runs as steve, so globbing the agent's work dir from out here silently yields
+  # nothing and the flag becomes a no-op — the same shape of failure as the bug
+  # it is fixing.
   { sudo -u "$who" bash -lc "cd /home/$who/work/program && git pull -q origin main 2>/dev/null; \
-    timeout "$AGENT_TIMEOUT" claude -p \"You are ${who^}. Work item ${id} is in state '${state}' and routed to you.
+    ADDDIRS=(); for d in \"/home/$who/work\"/*/; do [ -d \"\$d/.git\" ] || continue; \
+      case \"\$d\" in */program/) continue ;; esac; ADDDIRS+=( --add-dir \"\${d%/}\" ); done; \
+    timeout "$AGENT_TIMEOUT" claude -p \"\${ADDDIRS[@]}\" \"You are ${who^}. Work item ${id} is in state '${state}' and routed to you.
 
 Read ${f} in full, then do YOUR role's part of it — no more.
 
