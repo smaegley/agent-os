@@ -23,6 +23,13 @@ Wants=network-online.target
 
 [Service]
 Type=notify
+# systemd-notify runs as a CHILD of this bash script, so its READY=1 and
+# WATCHDOG=1 arrive from a child PID. The default NotifyAccess=main rejects
+# those ("Got notification message from PID N, but reception only permitted for
+# main PID M"), the unit never becomes ready, start times out, and Restart=always
+# turns it into a permanent activating/auto-restart loop -- which reads as
+# "starting up" rather than "broken" at a glance.
+NotifyAccess=all
 # Confirm this matches the current dispatch cron user before enabling.
 User=steve
 ExecStart=/home/steve/maegley-lab/agent-os/provisioning/watch-dispatch.sh
