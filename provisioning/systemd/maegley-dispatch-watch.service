@@ -24,7 +24,7 @@ Wants=network-online.target
 [Service]
 Type=notify
 # Confirm this matches the current dispatch cron user before enabling.
-User=todd
+User=steve
 ExecStart=/home/steve/maegley-lab/agent-os/provisioning/watch-dispatch.sh
 Restart=always
 RestartSec=5

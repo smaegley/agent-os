@@ -23,7 +23,7 @@ Documentation=file:///home/steve/maegley-lab/agent-os/provisioning/EVENT-DISPATC
 
 [Service]
 Type=oneshot
-User=todd
+User=steve
 ExecStart=/home/steve/maegley-lab/agent-os/provisioning/dispatch.sh
 KillMode=process
 # Environment=PROGRAM_REPO=/home/steve/maegley-lab/program
