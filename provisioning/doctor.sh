@@ -87,6 +87,26 @@ for t in /home/steve/maegley-lab/program /home/steve/maegley-lab/agent-os \
   { [ "$dirty" = 0 ] && [ -z "$ahead" ]; } && ok "todd" "$n clean and pushed" || true
 done
 
+# --- the record mirror must not be behind GitHub -------------------------
+# The status-answer path reads /srv/git/program.git and refreshes its clone at
+# answer time, but it can only detect a FETCH failure — never that its origin is
+# itself stale. A mirror that quietly stops updating yields confidently wrong
+# status answers with no error anywhere. Assert freshness here instead.
+echo
+MIRROR=/srv/git/program.git
+if [ -d "$MIRROR" ]; then
+  before="$(git --git-dir="$MIRROR" rev-parse main 2>/dev/null || echo none)"
+  git --git-dir="$MIRROR" remote update --prune >/dev/null 2>&1
+  after="$(git --git-dir="$MIRROR" rev-parse main 2>/dev/null || echo none)"
+  if [ "$after" = none ]; then
+    bad "mirror" "cannot read $MIRROR — the status answer path has no record"
+  elif [ "$before" != "$after" ]; then
+    bad "mirror" "record mirror was STALE (was ${before:0:7}, now ${after:0:7}) — status answers were wrong"
+  else
+    ok "mirror" "record mirror current with GitHub (${after:0:7})"
+  fi
+fi
+
 # --- what RUNS must exist in the record ----------------------------------
 # The check that would have caught the slack-bridge relay. A dirty-tree check
 # cannot: those files live outside every working tree, so git status is clean
