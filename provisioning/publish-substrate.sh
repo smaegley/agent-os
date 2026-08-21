@@ -10,7 +10,14 @@ SRC="${AGENT_OS:-/home/steve/maegley-lab/agent-os}"
 git -C "$SRC" push -q --mirror /opt/agent-os.git
 chmod -R a+rX /opt/agent-os.git
 echo "→ substrate published: $(git -C /opt/agent-os.git rev-parse --short HEAD)"
-for a in eric john theresa ken randal andrea; do
+# Use the roster, not a second hardcoded list. Todd was provisioned 2026-08-21
+# and this line would have quietly excluded him from every substrate publish --
+# he would run whatever skills existed the day he was created, forever, while
+# doctor reported him "substrate current" only because it never checked him
+# either (the roster parser was broken the same way). Two hardcoded lists, one
+# roster, and the roster was the thing nobody read.
+. "$(dirname "$0")/lib-agent.sh"
+for a in $(agent_list); do
   id "$a" >/dev/null 2>&1 || continue
   sudo -n test -d "/home/$a/work/agent-os" || continue
   sudo -u "$a" bash -c "cd /home/$a/work/agent-os && git fetch -q origin"
