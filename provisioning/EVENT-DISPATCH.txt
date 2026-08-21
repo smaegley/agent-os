@@ -45,7 +45,15 @@ Files added / changed in provisioning/ :
                                 re-scoped lock does (ADR §3, Consequences).
   HEARTBEAT_MAX_AGE  = 120 s    12x the poll interval; a live watcher heartbeats every ~10 s, so
                                 age exceeds this only when the watcher is actually dead.
-  RECORD_TTL_DAYS    = 7        dispatched.d records pruned after this to bound growth.
+  RECORD_STALE       = 900 s    (WR-009/ADR-0009 §3) how long a dispatched.d record SUPPRESSES a
+                                re-dispatch by the stateless sweep/cron. ~3x the reconcile interval:
+                                long enough to debounce a just-dispatched item, short enough that a
+                                still-routable item the sweep keeps seeing self-heals in minutes
+                                instead of stalling forever. Always << RECORD_TTL_DAYS. The WATCHER
+                                does NOT consult this — it gates on a real state: transition, so a
+                                stale record never blocks it (see §3, "no self-trigger").
+  RECORD_TTL_DAYS    = 7        dispatched.d records pruned OFF DISK after this (storage hygiene,
+                                separate from RECORD_STALE which governs suppression).
 
 State lives under MAEGLEY_STATE (default /home/steve/.local/state/maegley — where running.d
 already is):  running.d/<id>  dispatched.d/<id>  watch-last-commit  watch-heartbeat
@@ -62,13 +70,21 @@ watch-health-last.
                            completion/timeout. running.d is BOTH the board's truth and the mutex,
                            so they cannot drift.
   cascade cap           -> under the lock, refuse if fresh-marker count >= MAX_INFLIGHT.
-  no self-trigger       -> dispatched.d/<id> holds the last-dispatched state; a transition already
-                           dispatched is a no-op until the item moves to a different state. An
-                           agent committing its own state change + evidence therefore dispatches
-                           the NEXT step exactly once and never re-dispatches itself.
-  debounce              -> falls out of the above: several commits for one logical transition are
-                           all at/<= the fetched tip, so the item's resulting state is evaluated
-                           once; a straggler across polls hits the dispatch record.
+  no self-trigger       -> (WR-009/ADR-0009) split by dispatcher powers. The WATCHER is stateful:
+                           it diffs the state: field between its high-water commit and the tip and
+                           dispatches ONLY on a genuine transition, so an agent's own follow-up
+                           commit at an unchanged state is not an event and never re-dispatches it
+                           -- author-free, no record consulted. A legitimate RETURN to a routable
+                           state (e.g. blocked -> qa-ready) IS a transition and dispatches even past
+                           a stale record. The STATELESS sweep/cron cannot diff a transition, so
+                           they keep dispatched.d/<id> as a per-item debounce -- but bounded by
+                           RECORD_STALE (above), so a still-routable item self-heals instead of
+                           stalling. (Pre-ADR-0009 the record keyed on destination STATE alone and
+                           permanently suppressed a legitimate return -- the four-item stall of
+                           2026-08-20/21; that is the defect this fixes.)
+  debounce              -> watcher: several commits for one logical transition are all at/<= the
+                           fetched tip, so the resulting state is evaluated once. sweep/cron: the
+                           RECORD_STALE-bounded dispatched.d record debounces within its window.
   write-during-read     -> the watcher reads git OBJECTS at a fixed pushed SHA, never a live
                            working tree. Concurrent pushes only advance origin to a new tip.
   crux (origin vs local)-> the watcher keys off origin's ref (ls-remote) and reads AT the pushed

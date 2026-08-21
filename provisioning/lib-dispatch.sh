@@ -18,9 +18,27 @@
 #     substrate: written under the lock, it is what the item-busy, per-agent, and
 #     in-flight-cap checks all count. Board truth and mutex are the same fact.
 #   * a per-item dispatch record (dispatched.d/<id> = last-dispatched state)
-#     kills self-triggering and gives debounce for free: an agent committing its
-#     own state change + evidence does not re-dispatch itself, and several
-#     commits for one logical transition dispatch once.
+#     gives debounce and stops the STATELESS re-readers (the reconcile sweep and
+#     the cutover cron) re-dispatching a still-routable item on every pass.
+#
+# WR-009 / ADR-0009 corrects how self-trigger is guarded. The original build
+# keyed the record on the destination STATE ALONE and used it as the transition
+# detector for every dispatcher — which permanently, silently suppressed a
+# LEGITIMATE RETURN to a routable state (an item Eric ran, found unmergeable, and
+# correctly left at qa-ready would never be looked at again). The fix splits the
+# guard by each dispatcher's actual powers (ADR-0009 §2/§3):
+#   * the WATCHER is stateful — it reads front matter at two commits, so it gates
+#     on a genuine state: TRANSITION between its high-water commit and the tip.
+#     An agent's own follow-up commit at an unchanged state is not a transition
+#     (no self-trigger, author-free); a real return to a routable state IS, and
+#     dispatches even past a stale record. The watcher no longer needs the record
+#     as its self-trigger guard.
+#   * the reconcile sweep and the cutover cron are STATELESS re-readers that
+#     cannot diff a transition, so they keep the record — but BOUNDED by a short
+#     RECORD_STALE TTL, so a still-routable, unworked item self-heals after a
+#     bounded wait instead of stalling forever. This is the only mechanism that
+#     recovers the cross-repo unblock (the event that frees the item is a merge in
+#     agent-os, invisible to any fingerprint OF the program item).
 #
 # route() and the per-item guards are IDENTICAL to the batch's — WR-009 changes
 # WHEN dispatch fires, never WHERE items go (spec §3/§8). This file is sourced
@@ -47,7 +65,14 @@ LOCK="${DISPATCH_LOCK:-/tmp/maegley-dispatch.lock}"   # same lock the batch used
 MAX_INFLIGHT="${MAX_INFLIGHT:-${MAX_DISPATCH:-2}}"   # cascade cap, was MAX_DISPATCH=2 per run
 AGENT_TIMEOUT="${AGENT_TIMEOUT:-1800}"               # confirmed against dispatch.sh L55
 MARKER_TTL="${MARKER_TTL:-$AGENT_TIMEOUT}"           # a marker older than this is a crash orphan
-RECORD_TTL_DAYS="${RECORD_TTL_DAYS:-7}"              # prune stale dispatch records after N days
+RECORD_TTL_DAYS="${RECORD_TTL_DAYS:-7}"              # prune records off disk after N days (storage hygiene)
+# ADR-0009 §3: the record's SUPPRESSION expires far sooner than it is pruned. A
+# stateless dispatcher (sweep/cron) holds a still-routable item only while its
+# record is younger than RECORD_STALE; past that it re-looks. On the order of the
+# reconcile interval x a small factor (minutes to low-tens-of-minutes), and always
+# << RECORD_TTL_DAYS. The running.d mutex still blocks retry while an agent works,
+# so expiry can only re-dispatch an item that is genuinely stalled.
+RECORD_STALE="${RECORD_STALE:-900}"                  # seconds; suppression window for the backstop record
 
 WORK_TZ="${WORK_TZ:-America/Denver}"
 WORK_START="${WORK_START:-7}"; WORK_END="${WORK_END:-20}"   # inclusive, matches dispatch.sh
@@ -135,7 +160,18 @@ agent_busy()  { # $1=who — true if any fresh marker is owned by this agent
   return 1
 }
 inflight_count() { local n=0 m; for m in "$RUNDIR"/*; do [ -e "$m" ] && _marker_fresh "$m" && n=$((n+1)); done; echo "$n"; }
-already_dispatched() { [ -f "$RECDIR/$1" ] && [ "$(cat "$RECDIR/$1" 2>/dev/null)" = "$2" ]; }
+# already_dispatched(id, state) — true (=> hold) only if the record matches the
+# state AND is still within the RECORD_STALE window. An aged record no longer
+# suppresses, so a still-routable item the stateless sweep keeps seeing self-heals
+# after a bounded wait instead of stalling forever (ADR-0009 §3). The record's
+# mtime is written by record_dispatch, so file age == time since last dispatch.
+already_dispatched() {
+  [ -f "$RECDIR/$1" ] || return 1
+  [ "$(cat "$RECDIR/$1" 2>/dev/null)" = "$2" ] || return 1
+  local mtime age; mtime="$(stat -c %Y "$RECDIR/$1" 2>/dev/null)" || return 1
+  age=$(( $(date +%s) - ${mtime:-0} ))
+  [ "$age" -lt "$RECORD_STALE" ]
+}
 record_dispatch()    { printf '%s\n' "$2" > "$RECDIR/$1"; }
 write_marker()       { printf '%s %s\n' "$2" "$(date +%s)" > "$RUNDIR/$1"; }
 
@@ -280,8 +316,14 @@ Do not route it onward yourself and do not do another role's work.\" < /dev/null
 #   returns 0 and sets EV_STATUS=routed  when it dispatched (or shadow/dry)
 #   returns 1 and sets EV_STATUS=held     when a guard deferred it
 # ---------------------------------------------------------------------------
-dispatch_one() { # id file state who
-  local id=$1 f=$2 state=$3 who=$4 decision
+dispatch_one() { # id file state who [transition_confirmed]
+  # transition_confirmed=1 means the caller (the watcher) has already proven a
+  # genuine state: transition into this state between its high-water commit and
+  # the tip (ADR-0009 §2). That IS the self-trigger guard, so the stale
+  # destination-state record must not block it — the record's remaining job is the
+  # stateless backstop's, not the watcher's. dispatch.sh passes 0 (or omits it)
+  # and keeps consulting the now-TTL-bounded record.
+  local id=$1 f=$2 state=$3 who=$4 transition=${5:-0} decision
   # The fd-9 redirection MUST be inside the command substitution, on the brace
   # group, so flock locks the subshell's fd — not outside, where it would be
   # string text. flock is blocking here (no -n): a competing dispatcher waits
@@ -290,7 +332,7 @@ dispatch_one() { # id file state who
     {
       flock 9 || exit 0
       if item_busy "$id";            then echo "held:$id [$state] → $who (item already running)"; exit 0; fi
-      if already_dispatched "$id" "$state"; then echo "held:$id [$state] → $who (already dispatched this transition)"; exit 0; fi
+      if [ "$transition" != 1 ] && already_dispatched "$id" "$state"; then echo "held:$id [$state] → $who (already dispatched this transition)"; exit 0; fi
       if agent_busy "$who";          then echo "held:$id [$state] → $who ($who already busy)"; exit 0; fi
       if [ "$(inflight_count)" -ge "$MAX_INFLIGHT" ]; then echo "held:$id [$state] → $who (in-flight cap $MAX_INFLIGHT reached)"; exit 0; fi
       if [ "$DISPATCH_SHADOW" = 1 ]; then echo "shadow:$id [$state] → $who (would dispatch)"; exit 0; fi
@@ -314,11 +356,14 @@ dispatch_one() { # id file state who
 # ---------------------------------------------------------------------------
 # evaluate_item — resolve + (if routable) dispatch, in one call. The single
 # entry point dispatch.sh and the watcher share. Sets EV_STATUS / EV_WHO /
-# EV_REASON for the caller to report. The optional check_origin arg is for
-# dispatch.sh reading a local copy; the watcher passes "" (already at the tip).
+# EV_REASON for the caller to report. The optional origin_ok arg is for
+# dispatch.sh reading a local copy; the watcher passes 1 (already at the tip).
+# The optional transition arg (watcher only) says a genuine state: transition was
+# confirmed for this item, so dispatch_one must not let a stale record block it
+# (ADR-0009 §2); dispatch.sh omits it and the record guards as normal.
 # ---------------------------------------------------------------------------
-evaluate_item() { # id proj state infra uf adr owner file [origin_ok]
-  local id=$1 proj=$2 state=$3 infra=$4 uf=$5 adr=$6 owner=$7 f=$8 origin_ok=${9:-1}
+evaluate_item() { # id proj state infra uf adr owner file [origin_ok] [transition]
+  local id=$1 proj=$2 state=$3 infra=$4 uf=$5 adr=$6 owner=$7 f=$8 origin_ok=${9:-1} transition=${10:-0}
   local target; target="$(resolve_target "$id" "$proj" "$state" "$infra" "$uf" "$adr" "$owner")"
 
   case "$target" in
@@ -347,5 +392,5 @@ evaluate_item() { # id proj state infra uf adr owner file [origin_ok]
     EV_STATUS=stopped; EV_REASON="$id [$proj] — not pushed to origin; agents cannot see it"; return 1
   fi
 
-  dispatch_one "$id" "$f" "$state" "$target"
+  dispatch_one "$id" "$f" "$state" "$target" "$transition"
 }

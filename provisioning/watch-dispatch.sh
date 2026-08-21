@@ -24,11 +24,18 @@
 # working tree) is what makes write-during-read a non-issue (ADR §3): agents
 # pushing meanwhile only advance origin to a new tip, handled on the next poll.
 #
-# Self-trigger and debounce are handled by lib-dispatch.sh, not here: the
-# per-item dispatch record means an agent's own commit of its state change +
-# evidence dispatches the next step exactly once, and several commits landing
-# together for one logical transition are all at or before the same fetched tip,
-# so the item's resulting state is evaluated once.
+# Self-trigger is guarded HERE, by construction (ADR-0009 §2): on the diff path
+# we dispatch an item only when its front-matter state: actually TRANSITIONED
+# between the high-water commit and the tip. An agent's own follow-up commit at an
+# unchanged state (evidence, a status note, a finding left in place) is not a
+# transition, so it does not re-dispatch — without consulting a record or
+# comparing committer identity. A legitimate RETURN to a routable state (e.g.
+# blocked -> qa-ready) IS a transition and dispatches even past a stale record
+# (the flag threaded into evaluate_item). Several commits landing together for one
+# logical transition are all at or before the same fetched tip, so the resulting
+# state is evaluated once. The full-re-evaluation fallback (no valid high-water
+# mark) has no "previous" to diff, so there it falls back to the TTL-bounded
+# record in lib-dispatch.sh for debounce.
 #
 # HEALTH (ADR §5, spec §6.11 ship gate): a dead watcher looks exactly like an
 # idle queue, so this touches a heartbeat every loop and pings the systemd
@@ -60,18 +67,20 @@ remote_tip() { git -C "$REPO" ls-remote "$RECORD_ORIGIN" "$RECORD_REF" 2>/dev/nu
 # fall back to evaluating ALL items at tip — safe, because the dispatch record
 # makes an already-handled transition a no-op.
 process_range() { # last tip
-  local last=$1 tip=$2 files f
+  local last=$1 tip=$2 files f mode
   if [ -n "$last" ] && git -C "$REPO" merge-base --is-ancestor "$last" "$tip" 2>/dev/null; then
+    mode=diff       # we have a real "previous" — gate on a genuine state: transition
     files="$(git -C "$REPO" diff --name-only "$last" "$tip" -- projects/ 2>/dev/null \
              | grep -E '^projects/[^/]+/[^/]+\.md$' || true)"
   else
+    mode=full       # no valid high-water — no "previous" to diff; lean on the TTL'd record
     [ -n "$last" ] && log "high-water $last not an ancestor of $tip — full re-evaluation"
     files="$(git -C "$REPO" ls-tree -r --name-only "$tip" -- projects/ 2>/dev/null \
              | grep -E '^projects/[^/]+/[^/]+\.md$' || true)"
   fi
   [ -n "$files" ] || return 0
 
-  local id proj state infra uf adr owner
+  local id proj state infra uf adr owner prevstate transition
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     # Front matter read from the git object at the pushed tip — never a live file.
@@ -81,11 +90,29 @@ process_range() { # last tip
     infra="$(fm_blob infra "$tip" "$f")";  uf="$(fm_blob user_facing "$tip" "$f")"
     adr="$(fm_blob needs_adr "$tip" "$f")"; owner="$(fm_blob owner "$tip" "$f")"
 
+    # ADR-0009 §2 — the self-trigger guard, author-free. On the diff path, compare
+    # the state: field at the high-water commit against the tip: dispatch ONLY on a
+    # genuine transition. A changed file whose state did not move (an agent's own
+    # evidence/status commit) is NOT a transition -> skipped, so an agent never
+    # re-dispatches itself. A real state: change -> transition=1, which also tells
+    # dispatch_one to ignore any stale destination-state record for this item, so a
+    # legitimate return to a routable state is no longer silently suppressed.
+    #   NB fm_blob on a commit where the file did not exist yields "" — so a brand
+    #   new item ("" -> new) reads as a transition and dispatches, as it must.
+    # The full-re-evaluation path has no meaningful "previous": transition=0, and
+    # the TTL-bounded record in lib-dispatch.sh provides debounce.
+    transition=0
+    if [ "$mode" = diff ]; then
+      prevstate="$(fm_blob state "$last" "$f")"
+      [ "$prevstate" = "$state" ] && continue   # file touched but state unchanged — not an event
+      transition=1
+    fi
+
     # origin_ok=1: we are reading AT the pushed tip, so the item is on origin by
-    # construction — the crux resolved (ADR §1). An unpushed local edit never
+    # construction — the crux resolved (ADR-0001 §1). An unpushed local edit never
     # advances the ref and never reaches here.
     evaluate_item "$id" "$proj" "$state" "${infra:-false}" "${uf:-false}" "${adr:-false}" \
-                  "$owner" "$f" 1
+                  "$owner" "$f" 1 "$transition"
     case "$EV_STATUS" in
       routed) log "dispatched $EV_REASON" ;;
       shadow) log "SHADOW would-dispatch $EV_REASON" ;;
