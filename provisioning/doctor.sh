@@ -31,8 +31,24 @@ SUBSTRATE_HEAD="$(git -C "$MIRROR" rev-parse HEAD 2>/dev/null || echo unknown)"
 
 for a in $(agent_list); do
   # --- identity ------------------------------------------------------------
-  sudo -n test -f "/home/$a/.claude/.credentials.json" \
-    && ok "$a" "authenticated" || bad "$a" "not authenticated — cannot be dispatched"
+  # Existence is not validity. Randal's token expired 2026-08-21 and every
+  # dispatch to him failed 401 while this check happily reported "authenticated"
+  # -- the file was right there. Tokens refresh on use, so an agent that stops
+  # being dispatched for any reason silently ages out and cannot come back
+  # without an interactive login. Compare expiresAt to now; it costs a file read.
+  if ! sudo -n test -f "/home/$a/.claude/.credentials.json"; then
+    bad "$a" "not authenticated — cannot be dispatched"
+  else
+    exp="$(sudo -n grep -oE '"expiresAt":[0-9]+' "/home/$a/.claude/.credentials.json" 2>/dev/null | head -1 | cut -d: -f2)"
+    now_ms=$(( $(date +%s) * 1000 ))
+    if [ -z "$exp" ]; then
+      ok "$a" "authenticated (no expiry recorded)"
+    elif [ "$exp" -le "$now_ms" ]; then
+      bad "$a" "TOKEN EXPIRED $(( (now_ms - exp) / 3600000 ))h ago — dispatches will 401; needs interactive re-login"
+    else
+      ok "$a" "authenticated (expires in $(( (exp - now_ms) / 3600000 ))h)"
+    fi
+  fi
 
   # --- the boundary itself, re-asserted rather than assumed ----------------
   sudo -n -u "$a" ls /home/steve/.ssh/ >/dev/null 2>&1 \
