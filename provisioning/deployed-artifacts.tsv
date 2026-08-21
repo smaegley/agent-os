@@ -26,3 +26,13 @@
 /usr/local/sbin/slack-bridge-intake-runner	slack-bridge	deploy/slack-bridge-intake-runner
 /etc/systemd/system/slack-bridge-intake-runner.path	slack-bridge	systemd/slack-bridge-intake-runner.path
 /etc/systemd/system/slack-bridge-intake-runner.service	slack-bridge	systemd/slack-bridge-intake-runner.service
+/usr/local/bin/answer-queue	slack-bridge	deploy/answer-queue
+/usr/local/sbin/slack-bridge-answer-runner	slack-bridge	deploy/slack-bridge-answer-runner
+/usr/local/lib/answer/answerlib.py	slack-bridge	deploy/answerlib.py
+/usr/local/lib/answer/status-answer	slack-bridge	deploy/status-answer
+/usr/local/lib/answer/question-answer	slack-bridge	deploy/question-answer
+/usr/local/lib/answer/question-answer-wrapper	slack-bridge	deploy/question-answer-wrapper
+/etc/systemd/system/slack-bridge-status-runner.path	slack-bridge	systemd/slack-bridge-status-runner.path
+/etc/systemd/system/slack-bridge-status-runner.service	slack-bridge	systemd/slack-bridge-status-runner.service
+/etc/systemd/system/slack-bridge-question-runner.path	slack-bridge	systemd/slack-bridge-question-runner.path
+/etc/systemd/system/slack-bridge-question-runner.service	slack-bridge	systemd/slack-bridge-question-runner.service
