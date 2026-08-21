@@ -99,7 +99,7 @@ route() {  # state infra uf adr owner
     *)              echo "UNKNOWN" ;;
   esac
 }
-KNOWN_TERMINAL="needs-exec token-needed qa-passed uat-passed accepted done hold"
+KNOWN_TERMINAL="needs-exec token-needed qa-passed uat-passed accepted cancelled done hold"
 
 within_work_hours() {
   [ "${IGNORE_HOURS:-0}" = "1" ] && return 0

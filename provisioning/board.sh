@@ -35,6 +35,10 @@ meaning() { case "$1" in
   # closed it as-is without verification, knowingly. Rendering them identically
   # would let an unverified item read as a QA-passed one later.
   accepted)     echo "—|0|accepted as-is by you — closed WITHOUT QA verification" ;;
+  # Distinct from both. done = QA verified it. accepted = you closed it as-is.
+  # cancelled = it was looked at and deliberately not done. A findings backlog
+  # needs this outcome, and calling it "accepted" would misread later.
+  cancelled)    echo "—|0|cancelled — reviewed and deliberately not done" ;;
   blocked)      echo "You|1|stuck — needs a decision or access from you" ;;
   hold)         echo "—|0|on hold — you parked it; no agent will pick it up" ;;
   adr-needed)   echo "John|0|queued — built, but its design record needs correcting" ;;
