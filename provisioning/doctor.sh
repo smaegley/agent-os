@@ -98,9 +98,9 @@ for t in /home/steve/maegley-lab/program /home/steve/maegley-lab/agent-os \
   n="$(basename "$t")"
   dirty="$(git -C "$t" status --porcelain 2>/dev/null | wc -l)"
   ahead="$(git -C "$t" status -sb 2>/dev/null | grep -o 'ahead [0-9]*' || true)"
-  [ "$dirty" != 0 ] && bad "todd" "$n has $dirty uncommitted file(s)" || true
-  [ -n "$ahead" ]   && bad "todd" "$n is $ahead — work nobody else can see" || true
-  { [ "$dirty" = 0 ] && [ -z "$ahead" ]; } && ok "todd" "$n clean and pushed" || true
+  [ "$dirty" != 0 ] && bad "operator" "$n has $dirty uncommitted file(s)" || true
+  [ -n "$ahead" ]   && bad "operator" "$n is $ahead — work nobody else can see" || true
+  { [ "$dirty" = 0 ] && [ -z "$ahead" ]; } && ok "operator" "$n clean and pushed" || true
 done
 
 # --- the record mirror must not be behind GitHub -------------------------

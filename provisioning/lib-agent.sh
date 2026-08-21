@@ -26,11 +26,16 @@ agent_git() { local a="$1" r="$2"; shift 2; sudo -n -u "$a" git -C "/home/$a/wor
 # Every provisioned agent, from the roster rather than a hardcoded list.
 agent_list() {
   local roster="${AGENT_OS:-/home/steve/maegley-lab/agent-os}/AGENTS.md" a
-  for a in $(grep -oE '^\| \*\*[a-z]+\*\*' "$roster" 2>/dev/null | tr -d '|* ' | sort -u); do
+  # The roster CAPITALISES names (| **Todd** | Ops | ...), so the original
+  # '[a-z]+' pattern never matched a single row and the fallback below has been
+  # the real list since this was written -- silently, because a fallback that
+  # always fires looks exactly like a parser that always works. Match either
+  # case and lowercase the result.
+  for a in $(grep -oE '^\| \*\*[A-Za-z]+\*\*' "$roster" 2>/dev/null | tr -d '|* ' | tr 'A-Z' 'a-z' | sort -u); do
     id "$a" >/dev/null 2>&1 && echo "$a"
   done
   # Fall back to the known set if the roster table cannot be parsed, so a
   # formatting change in a doc can never silently shrink an audit to zero.
-  grep -qE '^\| \*\*[a-z]+\*\*' "$roster" 2>/dev/null || \
-    for a in eric john theresa ken randal andrea; do id "$a" >/dev/null 2>&1 && echo "$a"; done
+  grep -qE '^\| \*\*[A-Za-z]+\*\*' "$roster" 2>/dev/null || \
+    for a in eric john theresa ken randal andrea todd; do id "$a" >/dev/null 2>&1 && echo "$a"; done
 }
