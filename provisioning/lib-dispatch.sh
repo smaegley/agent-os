@@ -75,7 +75,7 @@ fm_blob() { # fm_blob <field> <commit> <path> [gitdir-repo]
 # states are absent on purpose (they echo ""); unknown states echo UNKNOWN.
 # This is the routing table WR-009 must not touch.
 # ---------------------------------------------------------------------------
-route() {
+route() {  # state infra uf adr owner
   case "$1" in
     new)            echo theresa ;;
     spec-ready)     { [ "$2" = true ] || [ "$4" = true ]; } && echo john || echo randal ;;
@@ -83,7 +83,15 @@ route() {
     env-needed)     echo ken ;;
     token-needed)   echo "" ;;
     qa-ready|qa-prep|built) echo eric ;;
-    needs-exec)     echo "" ;;
+    # needs-exec is where the machine says "an operator must act" (AGENTS.md). WR-011
+    # gives that operator a runtime: an item explicitly routed to Todd (owner=todd) is
+    # dispatched to him and its non-destructive steps run unattended; every other owner
+    # (steve, unassigned) still STOPS here — visibly waiting on a human, exactly as
+    # before. Todd himself escalates a prod-touching step by setting owner=steve (the
+    # unchanged "waiting on Steve" expression), and the release-only `approve` command
+    # (slack-bridge, ADR-0008) flips it back to owner=todd, which re-dispatches him.
+    # This is the ONLY routing change WR-011 makes: no new state, no new target but Todd.
+    needs-exec)     [ "$5" = todd ] && echo todd || echo "" ;;
     hold)           echo "" ;;
     adr-needed)     echo john ;;
     qa-passed)      [ "$3" = true ] && echo andrea || echo "" ;;
@@ -154,7 +162,7 @@ resolve_target() { # id proj state infra uf adr owner
 
   [ "$state" = blocked ] && { echo "STOP:blocked:$id [$proj] — blocked, needs Steve"; return; }
 
-  local who; who="$(route "$state" "$infra" "$uf" "$adr")"
+  local who; who="$(route "$state" "$infra" "$uf" "$adr" "$owner")"
 
   if [ "$who" = UNKNOWN ]; then
     case " $KNOWN_TERMINAL " in
@@ -309,7 +317,18 @@ evaluate_item() { # id proj state infra uf adr owner file [origin_ok]
 
   case "$target" in
     STOP:blocked:*)       EV_STATUS=blocked;       EV_REASON="${target#STOP:blocked:}";       return 1 ;;
-    STOP:stopped:*)       EV_STATUS=stopped;       EV_REASON="${target#STOP:stopped:}";       return 1 ;;
+    STOP:stopped:*)
+      # WR-011 resume path. Todd's escalate→approve round-trip keeps state=needs-exec and
+      # only flips owner (todd→steve on escalate, steve→todd on approve). The anti-self
+      # -trigger record keys on STATE alone, so without this the post-approval owner flip
+      # would be suppressed as "already dispatched this transition" and Todd would never
+      # be re-triggered. When a needs-exec item parks here (owner=steve, waiting), clear
+      # its record so the later flip to owner=todd dispatches. This is inert everywhere
+      # else: a stopped item is never dispatched, and any OTHER resurrection changes the
+      # state (a new fingerprint that dispatches regardless), so only the same-state
+      # owner flip depends on it. Scoped to needs-exec to touch nothing else.
+      [ "$state" = needs-exec ] && rm -f "$RECDIR/$id" 2>/dev/null || true
+      EV_STATUS=stopped;       EV_REASON="${target#STOP:stopped:}";       return 1 ;;
     STOP:unknown:*)       EV_STATUS=unknown;       EV_REASON="${target#STOP:unknown:}";       return 1 ;;
     STOP:unprovisioned:*) EV_STATUS=unprovisioned; EV_REASON="${target#STOP:unprovisioned:}"; return 1 ;;
     STOP:contradiction:*) EV_STATUS=contradiction; EV_REASON="${target#STOP:contradiction:}"; return 1 ;;
