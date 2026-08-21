@@ -1,0 +1,299 @@
+#!/usr/bin/env bash
+# deploy <artifact>  — install one recorded, Steve-approved application to prod.
+#
+# WR-012 / ADR-0002. This is the FIRST agent grant that MUTATES prod; every prior
+# grant was read-only (qa-verify.sh, dev-readonly.sh) or wrote only the record
+# (intake, approve). Its safety is therefore STRUCTURAL, in the notify/intake/approve
+# shape — a single-purpose root-mediated wrapper whose bound is a property it has by
+# construction, not a matter of trusting the caller:
+#
+#   * ONE argument: an application name. NO host path, NO repo path, NO unit name, NO
+#     command is taken from the caller. What is installed, where, and which unit
+#     restarts are read FROM THE RECORD (deployed-artifacts.tsv), never from Eric.
+#   * The application must be on the eric-deployable allowlist (slack-bridge,
+#     proxmox-dashboard — the disposable apps). Anything else — infra:true, the
+#     agent-os substrate, the ha-ops HA mirror, a hypervisor — is refused and logged.
+#   * It ships nothing without a durable, bound Steve-approval recorded in `program`
+#     for THIS application and the deploy step, still un-consumed. No record → no
+#     deploy. Eric's say-so or a bare dispatch is NOT enough (ADR-0002 §5).
+#   * The commit it installs is the SHA the approval names (the tip QA verified),
+#     never a caller-chosen or floating tip.
+#
+# Installed root/deploy-svc-owned at /usr/local/bin/deploy and NOT writable by eric.
+# Invoked by Eric through a narrow grant — `eric ALL=(deploy-svc) NOPASSWD:
+# /usr/local/bin/deploy` — so identity comes from SUDO_USER (as `notify` does), Eric
+# gets NO shell, NO general sudo, and NO prod/root key: the prod-write capability is
+# deploy-svc's and Eric never sees it. doctor.sh asserts every one of those bounds.
+#
+# The credential rule holds for the eighth time: root/deploy-svc holds the secret,
+# this wrapper mediates, the agent never sees it (STATE.md "Credential rule").
+#
+# Record separation (criterion 6): the deploy event is written SEPARATELY from Eric's
+# QA verdict, so "Eric verified this" and "Eric deployed this" stay independently
+# attributable — the cheap compensation for the QA independence knowingly traded when
+# the certifying role became the shipping role.
+
+set -uo pipefail
+
+# ---------------------------------------------------------------------------
+# Config. Overridable via /etc/maegley-deploy.conf so the plumbing (clone
+# location, deploy-svc state dir, bare-repo map) is the operator's to set at
+# provision time without editing this recorded, byte-checked wrapper.
+# ---------------------------------------------------------------------------
+CONF=/etc/maegley-deploy.conf
+[ -r "$CONF" ] && . "$CONF"
+
+# The published agent-os mirror — the AUTHORITATIVE, agent-denied record of the
+# manifest and the allowlist. Read from HEAD of the bare repo, never a mutable
+# working copy: the same source doctor.sh resolves and enforces running==committed
+# against, so what `deploy` is bounded by cannot silently disagree with what
+# doctor.sh proves.
+SUBSTRATE_GIT="${SUBSTRATE_GIT:-/opt/agent-os.git}"
+MANIFEST_PATH="${MANIFEST_PATH:-provisioning/deployed-artifacts.tsv}"
+ALLOW_PATH="${ALLOW_PATH:-provisioning/eric-deployable.allow}"
+
+# deploy-svc-owned, eric-unreadable state: the program clone the approval is read
+# from and the deploy event is written to, the consumed-token markers (anti-replay),
+# and the local authoritative log.
+PROGRAM_CLONE="${PROGRAM_CLONE:-/var/lib/deploy/program}"
+PROGRAM_REMOTE="${PROGRAM_REMOTE:-origin}"
+STATE_DIR="${DEPLOY_STATE:-/var/lib/deploy/state}"
+CONSUMED_DIR="$STATE_DIR/consumed.d"
+DEPLOY_LOG="${DEPLOY_LOG:-$STATE_DIR/deploy.log}"
+
+# Bare repos the committed source is read from. MUST match doctor.sh's RECORD map,
+# or the target bound and the running==committed check would resolve against
+# different sources. Overridable only as a whole, via the conf.
+declare -A RECORD=(
+  [agent-os]="${GIT_AGENT_OS:-/opt/agent-os.git}"
+  [slack-bridge]="${GIT_SLACK_BRIDGE:-/srv/git/slack-bridge.git}"
+  [proxmox-dashboard]="${GIT_PROXMOX_DASHBOARD:-/srv/git/proxmox-dashboard.git}"
+)
+
+# ---------------------------------------------------------------------------
+# Logging. Every refusal and every deploy is logged — a deploy Eric is not
+# authorised for is refused AND LOGGED, never silently skipped (criterion 3).
+# Identity is the invoking agent, taken from SUDO_USER, never an argument.
+# ---------------------------------------------------------------------------
+AGENT="${SUDO_USER:-}"
+mkdir -p "$STATE_DIR" "$CONSUMED_DIR" 2>/dev/null || true
+
+log()  { printf '%s deploy[%s] %s\n' "$(date -Iseconds)" "${AGENT:-?}" "$*" >> "$DEPLOY_LOG" 2>/dev/null || true; }
+die()  { local code=$1; shift; echo "deploy: $*" >&2; log "REFUSED/FAILED ($code): $*"; exit "$code"; }
+
+# ---------------------------------------------------------------------------
+# Front-matter reader — the lib-dispatch.sh idiom. Reads one field from the
+# front-matter block of a work item at a fixed committed blob (never a working
+# copy), so a write-during-read cannot change what we authorised against.
+# ---------------------------------------------------------------------------
+fm_blob() { # fm_blob <field> <commit> <path>
+  git -C "$PROGRAM_CLONE" show "$2:$3" 2>/dev/null \
+    | sed -n '2,/^---$/p' | grep -E "^$1:" | head -1 | cut -d: -f2- | xargs
+}
+
+# ---------------------------------------------------------------------------
+# Argument and identity. One argument only; identity must be a real, permitted
+# deployer. The sudoers grant restricts the caller to eric, but we re-check here
+# rather than trust that the grant was installed exactly as intended.
+# ---------------------------------------------------------------------------
+ARTIFACT="${1:?usage: deploy <artifact>}"
+[ $# -eq 1 ] || die 64 "exactly one argument (an application name) is permitted; got $#"
+case "$ARTIFACT" in
+  *[!a-z0-9._-]*|'') die 64 "artifact name '$ARTIFACT' is not a bare application key" ;;
+esac
+[ -n "$AGENT" ] || die 64 "no SUDO_USER; run via the sudo grant, not directly"
+[ "$AGENT" = eric ] || die 77 "'$AGENT' may not deploy — the deploy grant is Eric's alone"
+
+# ---------------------------------------------------------------------------
+# 1. The target bound — the allowlist. Read from the authoritative substrate
+#    record, not the caller, not a host file that could have drifted. An
+#    application not on it is refused before anything is touched (criterion 3).
+# ---------------------------------------------------------------------------
+ALLOW="$(git -C "$SUBSTRATE_GIT" show "HEAD:$ALLOW_PATH" 2>/dev/null | sed -E 's/#.*//' | tr -s ' \t' '\n' | grep -E '^[a-z0-9._-]+$' || true)"
+[ -n "$ALLOW" ] || die 78 "no eric-deployable allowlist in the substrate record ($ALLOW_PATH) — nothing is deployable"
+if ! grep -qx "$ARTIFACT" <<<"$ALLOW"; then
+  die 77 "'$ARTIFACT' is not on the eric-deployable allowlist — refused (OUT targets stay human-gated)"
+fi
+
+# ---------------------------------------------------------------------------
+# 2. Refresh the program record (read-only reset to origin) and find the
+#    approval. Steve's approval is a DURABLE, BOUND record this command re-checks
+#    itself; it is not inferred from the dispatch or from Eric (ADR-0002 §5).
+#    We require, for THIS artifact and the deploy step, an un-consumed approval:
+#      deploy_artifact: <artifact>
+#      approved_step:   deploy
+#      pending_ask_state: approved
+#      owner:           eric
+#      deploy_sha:      <40-hex commit QA verified>
+#      pending_ask_token: <single-use token, not already consumed>
+#    Whoever wrote it — ADR-0008's release-only `approve` path on Steve's Slack
+#    "yes", or the operator recording Steve's yes/no — the RECORD is the contract,
+#    so this ships ahead of WR-011 and composes with the Slack path unchanged.
+# ---------------------------------------------------------------------------
+[ -d "$PROGRAM_CLONE/.git" ] || die 78 "no program clone at $PROGRAM_CLONE — cannot read the approval record"
+git -C "$PROGRAM_CLONE" fetch -q "$PROGRAM_REMOTE" 2>/dev/null \
+  || die 1 "cannot refresh the program record from $PROGRAM_REMOTE — refusing to ship on a stale record"
+git -C "$PROGRAM_CLONE" reset -q --hard "$PROGRAM_REMOTE/main" 2>/dev/null \
+  || die 1 "cannot reset the program clone to $PROGRAM_REMOTE/main"
+
+HEAD_SHA="$(git -C "$PROGRAM_CLONE" rev-parse HEAD)"
+match_item=""; match_sha=""; match_token=""; match_proj=""; matches=0
+while IFS= read -r path; do
+  [ -n "$path" ] || continue
+  [ "$(fm_blob deploy_artifact "$HEAD_SHA" "$path")" = "$ARTIFACT" ] || continue
+  [ "$(fm_blob approved_step "$HEAD_SHA" "$path")" = deploy ] || continue
+  [ "$(fm_blob pending_ask_state "$HEAD_SHA" "$path")" = approved ] || continue
+  [ "$(fm_blob owner "$HEAD_SHA" "$path")" = eric ] || continue
+  token="$(fm_blob pending_ask_token "$HEAD_SHA" "$path")"
+  sha="$(fm_blob deploy_sha "$HEAD_SHA" "$path")"
+  [ -n "$token" ] && [ -n "$sha" ] || continue
+  # Anti-replay: an approval whose token is already consumed is spent. A re-deploy
+  # needs a FRESH approval (ADR-0002 §5) — a second run cannot re-fire on a stale yes.
+  [ -e "$CONSUMED_DIR/$token" ] && continue
+  matches=$((matches+1))
+  match_item="$path"; match_sha="$sha"; match_token="$token"
+  match_proj="$(basename "$(dirname "$path")")"
+done < <(git -C "$PROGRAM_CLONE" ls-tree -r --name-only HEAD -- 'projects' 2>/dev/null | grep -E 'projects/[^/]+/WR-[0-9]+\.md$' || true)
+
+[ "$matches" -eq 0 ] && die 77 "no un-consumed Steve-approval for deploying '$ARTIFACT' — refused (the gate stays; approve it first)"
+[ "$matches" -gt 1 ] && die 1 "more than one un-consumed approval names '$ARTIFACT' — ambiguous, refusing rather than guessing which SHA to ship"
+
+# ---------------------------------------------------------------------------
+# 3. Resolve the artifact's manifest lines from the authoritative record and
+#    verify the approved SHA is a real commit in that artifact's bare repo. The
+#    source bare repo is the manifest's repo-key, at the approved SHA — never a
+#    caller path, never HEAD.
+# ---------------------------------------------------------------------------
+GITDIR="${RECORD[$ARTIFACT]:-}"
+[ -n "$GITDIR" ] || die 1 "no bare repo mapped for application '$ARTIFACT' (RECORD map / conf)"
+git --git-dir="$GITDIR" cat-file -e "${match_sha}^{commit}" 2>/dev/null \
+  || die 1 "approved SHA ${match_sha:0:12} is not a commit in $ARTIFACT's repo — refusing"
+
+# Gather (hostpath, repopath) pairs for this application from the manifest record.
+hostpaths=(); repopaths=()
+while IFS=$'\t' read -r hostpath key repopath; do
+  case "${hostpath:-}" in ''|\#*) continue ;; esac
+  [ "$key" = "$ARTIFACT" ] || continue
+  [ -n "${repopath:-}" ] || die 1 "malformed manifest line for $ARTIFACT: '$hostpath'"
+  hostpaths+=("$hostpath"); repopaths+=("$repopath")
+done < <(git -C "$SUBSTRATE_GIT" show "HEAD:$MANIFEST_PATH" 2>/dev/null)
+
+[ "${#hostpaths[@]}" -gt 0 ] || die 1 "'$ARTIFACT' is allowlisted but has no manifest entries — nothing recorded to deploy"
+
+# ---------------------------------------------------------------------------
+# 4. Install, all-or-nothing. Stage EVERY file to a temp first, verifying each
+#    exists at the approved SHA, BEFORE swapping any into place. If any read
+#    fails we install nothing and leave the previous artifact untouched
+#    (criterion 3: never partially applied). Per-file swap is atomic (install to
+#    a temp beside the target, then rename); the set is applied only after all
+#    reads succeed, so a bad SHA or a missing repo path can never leave prod half
+#    deployed.
+# ---------------------------------------------------------------------------
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/deploy.XXXXXX")" || die 1 "cannot create staging dir"
+trap 'rm -rf "$TMP"' EXIT
+
+changed=0; unit_file_changed=0; declare -a UNITS=()
+for i in "${!hostpaths[@]}"; do
+  hp="${hostpaths[$i]}"; rp="${repopaths[$i]}"
+  stage="$TMP/stage.$i"
+  git --git-dir="$GITDIR" cat-file -e "$match_sha:$rp" 2>/dev/null \
+    || die 1 "$ARTIFACT@$rp does not exist at approved SHA ${match_sha:0:12} — installing nothing"
+  git --git-dir="$GITDIR" show "$match_sha:$rp" > "$stage" 2>/dev/null \
+    || die 1 "cannot read $ARTIFACT@$rp at ${match_sha:0:12} — installing nothing"
+done
+
+# All reads succeeded. Now swap. Preserve the recorded mode/owner of the target if
+# it already exists (this replaces committed source in place; it does not invent
+# ownership). daemon-reload + restart only what changed, only for THIS artifact.
+for i in "${!hostpaths[@]}"; do
+  hp="${hostpaths[$i]}"; stage="$TMP/stage.$i"
+  if [ -e "$hp" ] && cmp -s "$stage" "$hp"; then
+    log "unchanged: $hp already at approved SHA ${match_sha:0:12}"
+  else
+    mode="$(stat -c '%a' "$hp" 2>/dev/null || echo 0755)"
+    owner="$(stat -c '%U:%G' "$hp" 2>/dev/null || echo root:root)"
+    dir="$(dirname "$hp")"
+    tmpf="$dir/.deploy.$$.$i"
+    install -m "$mode" -o "${owner%%:*}" -g "${owner##*:}" "$stage" "$tmpf" 2>/dev/null \
+      || install -m "$mode" "$stage" "$tmpf" \
+      || die 1 "cannot stage $hp for atomic swap — some files may already be updated; see log"
+    mv -f "$tmpf" "$hp" || die 1 "atomic swap failed for $hp"
+    changed=$((changed+1))
+    log "installed: $hp <- $ARTIFACT:${repopaths[$i]}@${match_sha:0:12}"
+  fi
+  case "$hp" in
+    /etc/systemd/system/*.service) unit_file_changed=1; UNITS+=("$(basename "$hp")") ;;
+    /etc/systemd/system/*.path)    unit_file_changed=1; UNITS+=("$(basename "$hp")") ;;
+  esac
+done
+
+# ---------------------------------------------------------------------------
+# 5. Restart, scoped to this artifact's units only — never a blanket systemctl.
+#    daemon-reload if any unit FILE changed. A .path unit is re-armed (restart);
+#    a .service is try-restart'd (restart only if active) UNLESS it is a oneshot
+#    (fired by its own .path/.timer — restarting it would double-fire), which we
+#    leave to re-fire on its next trigger. This is idempotent: an unchanged
+#    artifact touches no unit (criterion "no silent double-apply").
+# ---------------------------------------------------------------------------
+if [ "$changed" -gt 0 ]; then
+  [ "$unit_file_changed" = 1 ] && systemctl daemon-reload 2>>"$DEPLOY_LOG" || true
+  for u in ${UNITS[@]+"${UNITS[@]}"}; do
+    case "$u" in
+      *.path) systemctl restart "$u" 2>>"$DEPLOY_LOG" && log "restarted (re-armed) $u" || log "WARN restart $u failed" ;;
+      *.service)
+        if [ "$(systemctl show "$u" -p Type --value 2>/dev/null)" = oneshot ]; then
+          log "skipped restart of oneshot $u (re-fires on its trigger)"
+        else
+          systemctl try-restart "$u" 2>>"$DEPLOY_LOG" && log "try-restarted $u" || log "WARN try-restart $u failed"
+        fi ;;
+    esac
+  done
+else
+  log "no-op: $ARTIFACT already fully at approved SHA ${match_sha:0:12}"
+fi
+
+# ---------------------------------------------------------------------------
+# 6. Consume the token (anti-replay) and write the deploy-event record —
+#    SEPARATELY from Eric's QA verdict, so certification and shipping stay
+#    independently attributable (criterion 6). The consumed marker is the local
+#    anti-replay authority (survives a program push failure); the program record
+#    is the durable, third-party-readable attribution. Consume BEFORE the push so
+#    a re-run can never re-fire even if the push then fails.
+# ---------------------------------------------------------------------------
+printf '%s\t%s\t%s\t%s\n' "$(date -Iseconds)" "$ARTIFACT" "$match_sha" "$match_item" > "$CONSUMED_DIR/$match_token"
+log "DEPLOYED $ARTIFACT @ ${match_sha:0:12} (${changed} file(s) changed) approval $match_token consumed [$match_item]"
+
+# The separate deploy-event record in the program record. Best-effort push: the
+# install is already done and the consumed marker + local log hold the truth, so a
+# push failure is a LOUD warning to reconcile, not a rollback (you cannot un-restart
+# a unit, and the local record preserves attribution).
+DEPLOY_DIR="$PROGRAM_CLONE/projects/$match_proj/deploy"
+EVENT="$DEPLOY_DIR/$(date +%Y-%m-%d)-$(basename "$match_item" .md)-deploy.md"
+mkdir -p "$DEPLOY_DIR" 2>/dev/null || true
+{
+  echo "# Deploy event — $ARTIFACT"
+  echo
+  echo "- work item: $(basename "$match_item" .md)"
+  echo "- application: $ARTIFACT"
+  echo "- installed SHA: $match_sha"
+  echo "- deployed by: $AGENT (QA acting as deployer — see the separate qa/ verdict for what was *verified*)"
+  echo "- files changed: $changed"
+  echo "- host paths: ${hostpaths[*]}"
+  echo "- units restarted: ${UNITS[*]:-none}"
+  echo "- approval token (consumed): $match_token"
+  echo "- deployed at: $(date -Iseconds)"
+} > "$EVENT" 2>/dev/null || true
+
+if git -C "$PROGRAM_CLONE" add "$EVENT" 2>/dev/null \
+   && git -C "$PROGRAM_CLONE" -c user.name='deploy-svc' -c user.email='deploy-svc@maegley.local' \
+        commit -q -m "deploy: $ARTIFACT @ ${match_sha:0:12} by $AGENT ($match_token)" 2>/dev/null \
+   && git -C "$PROGRAM_CLONE" push -q "$PROGRAM_REMOTE" HEAD:main 2>/dev/null; then
+  log "deploy-event pushed to program: $EVENT"
+else
+  echo "deploy: WARNING — install succeeded but the deploy-event push to program failed;" >&2
+  echo "        local record is $DEPLOY_LOG and $CONSUMED_DIR/$match_token — reconcile the program record." >&2
+  log "WARN deploy-event push to program FAILED — local record holds the truth"
+fi
+
+echo "deployed $ARTIFACT @ ${match_sha:0:12} ($changed file(s) changed, units: ${UNITS[*]:-none})"
+exit 0

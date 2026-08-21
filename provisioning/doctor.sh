@@ -154,6 +154,67 @@ else
   done < "$MANIFEST"
 fi
 
+# --- WR-012: the eric deploy grant is EXACTLY what ADR-0002 says ----------
+# The first agent grant that MUTATES prod, so its bound is asserted here rather
+# than trusted — the evidence for the grant does NOT rest on Eric's word (Eric
+# verifies a grant that empowers Eric; this and `sudo -n -l -U eric` are the
+# third-party checks anyone can run). ABSENT is fine — the pre-WR-012 posture, as
+# with any not-yet-installed manifest artifact. PRESENT-BUT-WRONG fails loud:
+# broader, narrower, tampered, or drifted (criterion 5).
+echo
+DEPLOY_WRAPPER=/usr/local/bin/deploy
+if ! sudo -n test -e "$DEPLOY_WRAPPER" 2>/dev/null; then
+  ok "deploy" "eric deploy grant not installed here (pre-WR-012 posture)"
+else
+  # 1. `sudo -n -l -U eric` lists EXACTLY the one grant and nothing broader —
+  #    no wildcard, no second entry, no general sudo (criterion 2).
+  runlines="$(sudo -n -l -U eric 2>/dev/null | sed -n '/may run the following/,$p' | grep -E '^[[:space:]]*\(' || true)"
+  if [ "$(printf '%s\n' "$runlines" | grep -c .)" = 1 ] \
+     && printf '%s\n' "$runlines" | grep -qE '\(deploy-svc\) NOPASSWD: /usr/local/bin/deploy$'; then
+    ok "deploy" "eric grant is exactly (deploy-svc) NOPASSWD: /usr/local/bin/deploy"
+  else
+    bad "deploy" "eric sudo grant is NOT exactly the one deploy line — BROADER/NARROWER/DRIFTED: $(printf '%s' "$runlines" | tr '\n' '|')"
+  fi
+
+  # 2. The wrapper is deploy-svc/root-owned and NOT eric-writable — a mediated
+  #    command Eric could rewrite is not mediated at all.
+  own="$(sudo -n stat -c '%U' "$DEPLOY_WRAPPER" 2>/dev/null)"
+  case "$own" in
+    root|deploy-svc) ok "deploy" "wrapper owned by $own" ;;
+    *) bad "deploy" "wrapper owned by '$own' — must be root or deploy-svc" ;;
+  esac
+  sudo -n -u eric test -w "$DEPLOY_WRAPPER" 2>/dev/null \
+    && bad "deploy" "wrapper is ERIC-WRITABLE — eric could rewrite the mediated command" \
+    || ok "deploy" "wrapper not eric-writable"
+
+  # 3. The deploy-svc credential/state is unreadable by eric — root/deploy-svc
+  #    holds the secret, the agent never sees it (the credential rule).
+  for p in /var/lib/deploy/state /var/lib/deploy/program; do
+    sudo -n test -e "$p" 2>/dev/null || continue
+    sudo -n -u eric test -r "$p" 2>/dev/null \
+      && bad "deploy" "$p is ERIC-READABLE — deploy-svc credential/state exposed" \
+      || ok "deploy" "$(basename "$p") unreadable by eric"
+  done
+
+  # 4. The host allowlist equals the record and contains NO out-of-bound target
+  #    — the allowlist cannot silently grow to include an OUT target (§2).
+  HOST_ALLOW=/usr/local/lib/deploy/eric-deployable.allow
+  if sudo -n test -e "$HOST_ALLOW" 2>/dev/null; then
+    rec="$(git --git-dir=/opt/agent-os.git show HEAD:provisioning/eric-deployable.allow 2>/dev/null)"
+    live="$(sudo -n cat "$HOST_ALLOW" 2>/dev/null)"
+    [ -n "$rec" ] && [ "$live" = "$rec" ] \
+      && ok "deploy" "host allowlist matches record" \
+      || bad "deploy" "host allowlist DIFFERS from record (or record unreadable)"
+    if printf '%s\n' "$live" | sed -E 's/#.*//' | grep -qwE 'agent-os|ha-ops'; then
+      bad "deploy" "allowlist contains an OUT target (agent-os/ha-ops) — must stay human-gated"
+    else
+      ok "deploy" "allowlist contains no OUT target"
+    fi
+  else
+    bad "deploy" "deploy wrapper installed but no eric-deployable allowlist on host — grant is unbounded"
+  fi
+fi
+
 echo
 if [ "$FAIL" = 0 ]; then
   echo "all invariants hold"

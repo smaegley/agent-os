@@ -13,6 +13,8 @@
 
 /usr/local/bin/notify	agent-os	provisioning/notify
 /usr/local/bin/provision-env	agent-os	provisioning/provision-env
+/usr/local/bin/deploy	agent-os	provisioning/deploy
+/usr/local/lib/deploy/eric-deployable.allow	agent-os	provisioning/eric-deployable.allow
 /usr/local/bin/notify-queue	slack-bridge	deploy/notify-queue
 /usr/local/sbin/slack-bridge-relay	slack-bridge	deploy/slack-bridge-relay
 /etc/systemd/system/slack-bridge.service	slack-bridge	systemd/slack-bridge.service

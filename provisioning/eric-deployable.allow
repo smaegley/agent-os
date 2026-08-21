@@ -1,0 +1,21 @@
+# eric-deployable.allow — the applications Eric (QA) may deploy to prod.
+#
+# WR-012 / ADR-0002. One bare application key per line (a repo-key of
+# deployed-artifacts.tsv). `deploy <artifact>` refuses anything NOT listed here,
+# and doctor.sh asserts this record contains NO out-of-bound target.
+#
+# THE BOUND IS THIS FILE. It rides on the manifest doctor.sh already self-checks,
+# so it cannot silently drift; adding a target is a deliberate, recorded governance
+# act (a commit here + operator install), never something the grant can do to itself.
+#
+# IN — the disposable, local-bare-repo applications. A total loss of either costs
+# nothing; they are exactly PROCESS.md rule 2's shakedown targets.
+slack-bridge
+proxmox-dashboard
+
+# OUT, and staying human-gated (Todd, on Steve's approval) — NEVER add these here:
+#   agent-os          the substrate: routing, briefs, skills — governance, agent-denied,
+#                     published via publish-substrate.sh, never deployed by an agent
+#   ha-ops            the HA config mirror (PROCESS.md rule 2's named exclusion)
+#   anything infra:true, or any Proxmox hypervisor
+# Widening to any infra:true target is arguably its own ADR (ADR-0002 §2).

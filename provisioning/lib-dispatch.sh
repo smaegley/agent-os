@@ -90,8 +90,14 @@ route() {  # state infra uf adr owner
     # before. Todd himself escalates a prod-touching step by setting owner=steve (the
     # unchanged "waiting on Steve" expression), and the release-only `approve` command
     # (slack-bridge, ADR-0008) flips it back to owner=todd, which re-dispatches him.
-    # This is the ONLY routing change WR-011 makes: no new state, no new target but Todd.
-    needs-exec)     [ "$5" = todd ] && echo todd || echo "" ;;
+    #
+    # WR-012/ADR-0002 adds ONE more owner to the same shape: an approved deploy of an
+    # eric-deployable app resumes ERIC (owner=eric), who invokes `deploy`. This is the
+    # deploy step landing on exactly one role by target class — Eric for the disposable
+    # apps, Todd for every OUT target — with no new state and no new routing target
+    # beyond the two owners. The parked-at-stop record-clear in evaluate_item (scoped to
+    # needs-exec) already makes the steve→eric owner-flip re-dispatch, same as steve→todd.
+    needs-exec)     case "$5" in todd) echo todd ;; eric) echo eric ;; *) echo "" ;; esac ;;
     hold)           echo "" ;;
     adr-needed)     echo john ;;
     qa-passed)      [ "$3" = true ] && echo andrea || echo "" ;;
