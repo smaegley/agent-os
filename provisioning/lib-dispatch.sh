@@ -243,7 +243,16 @@ claiming work that is not committed:
 
 If you cannot complete it, set state to 'blocked', say why in the item, commit, and stop.
 Do not route it onward yourself and do not do another role's work.\" < /dev/null" \
-    >> "$REPO/log/dispatch.log" 2>&1; rm -f "$RUNDIR/$id"; } &
+    >> "$REPO/log/dispatch.log" 2>&1 \
+      || rm -f "$RECDIR/$id"; rm -f "$RUNDIR/$id"; } &
+  # ^ A FAILED agent run clears its dispatch record so the item can be retried.
+  # The record is written when dispatch STARTS, so without this a run that dies
+  # instantly still marks the transition "done" and suppresses every retry at
+  # that state -- permanently and silently, since nothing reports the failure.
+  # Hit three times in twelve hours on WR-011 (arg-parsing death, then an expired
+  # token, then again after re-auth) and cleared by hand each time. The
+  # anti-self-trigger property is unaffected: a SUCCESSFUL run keeps its record,
+  # and a run that changes state makes the old record irrelevant anyway.
   disown 2>/dev/null || true
 }
 
