@@ -1,4 +1,4 @@
-# State of the program — 2026-08-18 (end of day)
+# State of the program — 2026-08-21
 
 Current-state handoff. `ROLLOUT.md` describes the original Phase A–D plan and is now historical;
 **this file is what is true.** Written so a fresh session can pick up from the repos rather than
@@ -64,38 +64,35 @@ Live board: **http://10.0.1.128:8088/maegley-lab-board.html**
 
 | Item | State | Owner | Note |
 |---|---|---|---|
-| WR-001 | `hold` | — | config-sync apply. Parked by Steve behind 005/006 |
-| WR-002 | `hold` | — | LVM thin-pool guard. Parked |
-| WR-003 | `hold` | — | ha-triage verification. Parked |
-| WR-004 | `hold` | — | dashboard POC. Parked, verification deferred not waived |
-| WR-005 | `qa-ready` | Eric | reply path PASS; **R6 ran and passed** — awaiting Eric's re-verdict |
-| WR-006 | `qa-ready` | Eric | **intake works** — created and pushed a real WR-008 |
+| WR-001 | `done` | — | HA config mirror live and pushed. **QA verified, all 10 criteria** |
+| WR-005 | `done` | — | Slack bridge transport. **QA verified** |
+| WR-004 | `accepted` | — | Proxmox POC. **Closed as-is by Steve — NOT verified.** Never cite as a QA pass |
+| WR-002 | `hold` | — | LVM thin-pool guard |
+| WR-003 | `hold` | — | ha-triage retarget |
 | WR-007 | `hold` | — | record↔code link; misfiled migraine spec in ha-ops |
-| WR-008 | `new` | Theresa | **first item ever raised from Slack.** Awaiting elicitation |
-| WR-009 | `new` | — | event-driven dispatch; replaces 15-min batching |
+| WR-010 | `hold` | — | **HA recorder dies silently when its DB host boots second.** Live hazard, `needs_adr` |
+| WR-006 | `needs-exec` | Todd | intake COMPLETE. Status half: answerlib fixed (`e5fce2c`), **re-run pre-declared**. Questions live but unverified |
+| WR-009 | `needs-exec` | Todd | watcher live **in shadow**; B6 shadow parity next. Cron still dispatches |
+| WR-011 | `design-ready` | Randal | **running now** — Todd runtime + Slack Q&A. ADR-0008 |
 
 ## Open decisions for Steve
 
-1. **PROCESS.md step 9** — "Eric deploys to prod". Flagged five times, still unanswered.
+1. **PROCESS.md step 9** — "Eric deploys to prod". Flagged six times, unanswered.
    Recommendation: Eric certifies, ops deploys.
-2. **WR-005 gate 2** — accept WR-005 as transport-only, or hold it open until the capability
-   lands. **The capability landed tonight**, so this is now a live decision rather than
-   hypothetical.
-3. **Prod SSH under the harness.** PROCESS.md rule 1 says Steve is never handed raw shell
-   commands, but the auto-mode classifier blocks the operator from executing the prod half, so
-   every `needs-exec` item hands Steve a paste buffer. This is a harness-config decision, not a
-   credential one. Matters again the moment the ha-ops hold lifts — WR-001's T-6 is the first real
-   `--apply` against the config mirror.
+2. **WR-010** — activate it, or leave held. It is the only open item describing a live hazard that
+   will silently recur on the next power event.
+3. **Prod SSH under the harness** — the classifier blocks the operator from privileged steps
+   (`usermod`, sudoers, permission config). Every one this week was handed to Steve. **A headless
+   Todd (WR-011) has nobody to hand them to.**
 
 ## What is genuinely not built
 
-- **Status and question answering** over Slack (WR-006 criteria 3–9). Intake works; these are a
-  separate increment and were never in the dispatched scope.
-- **A check that the dispatcher itself is healthy.** It failed silently for hours twice. Still
-  unbuilt, and **WR-009 must not ship without it** — an event-driven dispatcher that dies looks
-  exactly like an idle queue.
-- **A spec/ADR ↔ code link.** `deployed-artifacts.tsv` asserts running bytes == committed bytes for
-  binaries. Nothing asserts which repo a `projects/<n>/` record governs — that is WR-007.
+- **Question answering is deployed but unverified.** The key is installed, the path works end to
+  end, Q1–Q3 never ran.
+- **Andrea (UAT) is still not provisioned** — and the human eye has now caught three defects every
+  mechanical check passed: `.cache/brands` (WR-001), the malformed-id answer, and the incomplete
+  status list.
+- **Todd has no runtime.** WR-011.
 
 ## What changed on 2026-08-18 (the day the bridge went end to end)
 
@@ -147,3 +144,31 @@ Two guards exist: `doctor.sh` asserts the invariants daily, and `lib-agent.sh` r
 `0750`-false-negative class by construction. Neither would have caught most of the above. **The
 habit that does: verify through the path the thing actually uses, against the world it describes
 — not through an adjacent path that is easier to run.**
+
+
+## 2026-08-19 → 21 — what changed, and the expensive lesson
+
+**Shipped:** ADR-0005/0006/0007/0008. Intake creates real pushed `WR-xxx` items from Slack. Status
+answering live. Question answering live behind an LLM key (`/etc/maegley/llm.env`, root:slack-answer
+`0640`; the bridge is verified unable to read it). Event-driven watcher running **in shadow** beside
+cron. `mirror-record.sh` keeps `/srv/git/program.git` current for the answer path.
+
+**`doctor.sh` gained three checks, each after something got through it:**
+`deployed-artifacts.tsv` (running bytes == committed bytes, 13 components) · record-mirror freshness
+(a stale mirror yields confidently wrong status answers) · **token validity, not just presence** —
+Randal's token expired while doctor reported "authenticated".
+
+**The 2026-08-20 outage, recorded because it is the pattern:** Todd shipped an `--add-dir` fix with
+the flag *after* `-p`, where `claude` expects the prompt. Every dispatch died instantly for ten
+hours. The agent exits in under a second, the marker is cleaned up normally, the dispatch record
+marks the transition done, and **nothing anywhere reports an error**. It then cascaded: no dispatch
+meant no token refresh, so Randal's credential expired; and the dispatch record suppressed all
+retries, so it could not self-correct.
+
+Fixed three ways — flag order; **a failed agent run now clears its dispatch record** so transient
+failures are retryable; and doctor checks token expiry.
+
+**The lesson, stated plainly:** the fix was verified by checking that the argument list was built
+correctly, not that the resulting command ran. That is the same class this file has catalogued from
+the start, committed by the operator inside a fix for another instance of it. **Verify the thing
+that runs, not the thing you changed.**
