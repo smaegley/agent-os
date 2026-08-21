@@ -209,6 +209,14 @@ start_agent() { # id file state who
   # only; the Write/Edit allow+deny rules in the agent's settings.json still
   # decide what may be modified, so the 2026-08-19 substrate boundary (agents may
   # change the machinery, never the rules) is unaffected.
+  # ORDER MATTERS: the flags go BEFORE -p. `claude -p` takes the prompt as its
+  # next argument, so `claude -p "${ADDDIRS[@]}" "<prompt>"` puts --add-dir where
+  # the prompt belongs and dies with "Input must be provided either through stdin
+  # or as a prompt argument". Shipped that way 2026-08-20 22:06 and it broke every
+  # dispatch for ten hours: the agent exits in under a second, the running.d
+  # marker is cleaned up normally, and nothing anywhere reports an error. The
+  # board simply showed an item that never moved.
+  #
   # Built INSIDE the agent's own shell: /home/<agent> is 0750 and the dispatcher
   # runs as steve, so globbing the agent's work dir from out here silently yields
   # nothing and the flag becomes a no-op — the same shape of failure as the bug
@@ -216,7 +224,7 @@ start_agent() { # id file state who
   { sudo -u "$who" bash -lc "cd /home/$who/work/program && git pull -q origin main 2>/dev/null; \
     ADDDIRS=(); for d in \"/home/$who/work\"/*/; do [ -d \"\$d/.git\" ] || continue; \
       case \"\$d\" in */program/) continue ;; esac; ADDDIRS+=( --add-dir \"\${d%/}\" ); done; \
-    timeout "$AGENT_TIMEOUT" claude -p \"\${ADDDIRS[@]}\" \"You are ${who^}. Work item ${id} is in state '${state}' and routed to you.
+    timeout "$AGENT_TIMEOUT" claude \"\${ADDDIRS[@]}\" -p \"You are ${who^}. Work item ${id} is in state '${state}' and routed to you.
 
 Read ${f} in full, then do YOUR role's part of it — no more.
 
