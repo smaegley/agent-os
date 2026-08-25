@@ -221,6 +221,33 @@ else
   fi
 fi
 
+# --- conversational surface + token survival (WR-013, ADR-0010) --------------
+# The runtime half (conversation-runner + its .path unit) and the token keep-alive
+# timer that lets a weekly-talked-to Todd survive quiet periods (ADR-0010 §6). Both
+# are SHIP-GATED (WR-011 approve path + WR-009 §6.11), so ABSENCE is expected before
+# enable — reported, not failed. HEALTH is asserted once installed, "as doctor does
+# the other units" (ADR-0010 Handoff §3).
+CR_BIN=/usr/local/sbin/conversation-runner
+if [ -x "$CR_BIN" ]; then
+  if systemctl is-enabled slack-bridge-conversation-runner.path >/dev/null 2>&1; then
+    ok "todd" "conversation-runner installed and its .path unit enabled"
+  else
+    bad "todd" "conversation-runner installed but its .path unit is NOT enabled — conversational turns will not fire"
+  fi
+else
+  ok "todd" "conversational surface not installed (expected until WR-011/WR-009 ship-gates clear)"
+fi
+
+if systemctl cat maegley-token-keepalive.timer >/dev/null 2>&1; then
+  if systemctl is-active maegley-token-keepalive.timer >/dev/null 2>&1; then
+    ok "todd" "token keep-alive timer active — quiet-period expiry mitigated"
+  else
+    bad "todd" "token keep-alive timer installed but NOT active — tokens will age out in quiet periods (WR-013 crit 8)"
+  fi
+else
+  ok "todd" "token keep-alive timer not installed — quiet-period token expiry UNMITIGATED (WR-013/ADR-0010 §6); the expiry check above is the only backstop"
+fi
+
 echo
 if [ "$FAIL" = 0 ]; then
   echo "all invariants hold"

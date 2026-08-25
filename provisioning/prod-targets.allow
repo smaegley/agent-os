@@ -1,0 +1,65 @@
+# prod-targets.allow — the GATED column of WR-013 §4, as escalation-accuracy data
+# for a conversational Todd (WR-013, ADR-0010 §2).
+#
+# WHAT THIS IS, AND — CRITICALLY — WHAT IT IS NOT.
+#
+# This is the "declared target list" WR-013 §7.2 offered "not chosen." ADR-0010 §2
+# ADOPTS it, but DEMOTES it to accuracy only: it is a lookup that helps Todd
+# RECOGNISE a prod-touching request early (so he composes a precise ask instead of
+# blindly attempting and failing) and PROCEED confidently on clearly-non-prod targets
+# (so he does not escalate needlessly). It is NOT the security boundary.
+#
+# THE SECURITY BOUNDARY IS STRUCTURAL AND ELSEWHERE (ADR-0010 §2, Context §1): Todd
+# holds no prod credential and no sudo, and the harness refuses privilege changes, so
+# NO conversation can effect prod regardless of what this file says. A misjudged prod
+# action fails CLOSED to an escalation — it does not execute. Therefore a stale,
+# incomplete, or wrong entry here can only ever cause a NUISANCE (a needless
+# escalation, or a failed attempt that then escalates), NEVER a breach. That is the
+# only reason it is safe to rely on this list at all.
+#
+# FAIL SAFE regardless: anything this list cannot resolve → escalate (todd.md
+# unchanged). The asymmetry WR-013 §4 demands (a wrong no-gate is a security failure,
+# a wrong gate is a nuisance) is satisfied by construction — only the nuisance
+# direction is reachable.
+#
+# Format: one target per line as `<kind> <id-or-key> [<human note>]`. Todd reads the
+# note when composing the plain-language ask. Keep it in step with WR-013 §4; adding or
+# removing a line is a recorded governance act (a commit here + operator publish via
+# publish-substrate.sh), never something Todd can do to himself.
+
+# --- GATED (stop and ask; present the five-field ask, mint a token, record the pending
+#     ask in program, then wait for `approve <token>`) --------------------------------
+
+# HA prod
+ha-vm            106                Home Assistant prod — VM 106, 10.0.1.146
+ha-config-mirror config-mirror      the HA config mirror (deploy target of ha-ops)
+
+# Application prod (the deployed apps)
+app              homesplit          homesplit — LXC 202
+app              photo-album        photo-album — LXC 209
+app              migraine-tracker   migraine-tracker
+app              solar-tracker      solar-tracker — LXC 207
+app              bi-lab             bi-lab — CT 211
+
+# Hypervisors
+hypervisor       NUC1B              Proxmox hypervisor
+hypervisor       NUC2c              Proxmox hypervisor
+
+# The org's own running services (Steve's ruling: inside the gate)
+service          slack-bridge       the inbound Slack bridge (running service)
+service          dispatcher         the dispatch daemon / watcher / timers
+service          codex-ops          the codex-ops host (LXC 301) as a running system
+
+# Credentials and privilege (ALSO human-only — the harness refuses these even with a
+# yes; name the class and escalate as human-only, do not loop, ADR-0010 §3 / todd.md)
+privilege        keys               SSH / API / deploy keys, minting or rotating
+privilege        sudoers            sudoers installs or edits
+privilege        agent-permissions  agent settings.json / tool permissions
+privilege        accounts           usermod / useradd / account changes
+
+# --- NOT GATED (Todd may proceed without asking — recorded here so the boundary is
+#     symmetric and auditable; NOT consulted as permission, just documentation) --------
+#   program          the record — specs, ADRs, status, QA evidence (routing/creating)
+#   test-env         the disposable test env, VMID 900
+#   sandbox          anything in a sandbox or an agent's own clone
+#   routing          routing an item to a role

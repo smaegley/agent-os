@@ -1,0 +1,11 @@
+[Unit]
+Description=Refresh agent Claude credentials so they survive quiet periods (WR-013/ADR-0010 §6)
+
+[Service]
+Type=oneshot
+# Runs as root so it can drop to each agent identity (sudo -u) and read that identity's
+# credential file to exercise it. Mints nothing, touches no prod — it only performs a
+# minimal authenticated no-op so "refresh on use" keeps the token from aging out. A
+# non-zero exit (a refresh that failed) is visible in the unit status; doctor.sh's
+# expiry check remains the loud backstop.
+ExecStart=/usr/local/sbin/token-keepalive.sh

@@ -1,0 +1,17 @@
+[Unit]
+Description=Run one conversational Todd turn from a queued Slack message (runtime half of the conversational surface, WR-013/ADR-0010)
+
+[Service]
+Type=oneshot
+# Runs as root so it can read the slack-bridge-owned conversation-inbox and write the
+# slack-bridge-owned outbox. It drops to the unprivileged `todd` user (sudo -u, never a
+# new privilege for the bridge) to invoke Todd one-shot — `claude -p --resume` — bounded
+# by AGENT_TIMEOUT. Todd holds no prod credential and no sudo, so no turn can effect prod
+# (ADR-0010 §2); the runner itself has no release authority (releasing a gated step stays
+# the structural ADR-0008 approve path, out of the conversation). Every accepted turn
+# terminates in a reply OR a loud failure posted to the outbox (ADR-0010 §7).
+#
+# KillMode=process so a long turn survives a service restart, matching the dispatcher.
+KillMode=process
+TimeoutStartSec=0
+ExecStart=/usr/local/sbin/conversation-runner
