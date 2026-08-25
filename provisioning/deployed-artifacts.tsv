@@ -36,3 +36,15 @@
 /etc/systemd/system/slack-bridge-status-runner.service	slack-bridge	systemd/slack-bridge-status-runner.service
 /etc/systemd/system/slack-bridge-question-runner.path	slack-bridge	systemd/slack-bridge-question-runner.path
 /etc/systemd/system/slack-bridge-question-runner.service	slack-bridge	systemd/slack-bridge-question-runner.service
+/usr/local/sbin/conversation-runner	agent-os	provisioning/conversation-runner
+/usr/local/sbin/token-keepalive.sh	agent-os	provisioning/token-keepalive.sh
+/etc/systemd/system/slack-bridge-conversation-runner.path	agent-os	provisioning/systemd/slack-bridge-conversation-runner.path
+/etc/systemd/system/slack-bridge-conversation-runner.service	agent-os	provisioning/systemd/slack-bridge-conversation-runner.service
+/etc/systemd/system/maegley-token-keepalive.service	agent-os	provisioning/systemd/maegley-token-keepalive.service
+/etc/systemd/system/maegley-token-keepalive.timer	agent-os	provisioning/systemd/maegley-token-keepalive.timer
+/usr/local/bin/conversation-queue	slack-bridge	deploy/conversation-queue
+/usr/local/bin/approve	slack-bridge	deploy/approve
+/usr/local/bin/approve-queue	slack-bridge	deploy/approve-queue
+/usr/local/sbin/slack-bridge-approve-runner	slack-bridge	deploy/slack-bridge-approve-runner
+/etc/systemd/system/slack-bridge-approve-runner.path	slack-bridge	systemd/slack-bridge-approve-runner.path
+/etc/systemd/system/slack-bridge-approve-runner.service	slack-bridge	systemd/slack-bridge-approve-runner.service
