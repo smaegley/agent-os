@@ -166,14 +166,20 @@ DEPLOY_WRAPPER=/usr/local/bin/deploy
 if ! sudo -n test -e "$DEPLOY_WRAPPER" 2>/dev/null; then
   ok "deploy" "eric deploy grant not installed here (pre-WR-012 posture)"
 else
-  # 1. `sudo -n -l -U eric` lists EXACTLY the one grant and nothing broader —
-  #    no wildcard, no second entry, no general sudo (criterion 2).
+  # 1. `sudo -n -l -U eric` lists the deploy grant and nothing BROADER — no
+  #    wildcard, no general sudo, no third entry (criterion 2). The bound is "no
+  #    broader power", NOT "no other line": every agent also holds the pre-existing
+  #    `(root) NOPASSWD: /usr/local/bin/notify` grant, which is not part of this
+  #    grant's surface — tolerate it, and only it. Assert the deploy line is
+  #    present exactly and that nothing beyond it and the shared notify grant appears.
   runlines="$(sudo -n -l -U eric 2>/dev/null | sed -n '/may run the following/,$p' | grep -E '^[[:space:]]*\(' || true)"
-  if [ "$(printf '%s\n' "$runlines" | grep -c .)" = 1 ] \
-     && printf '%s\n' "$runlines" | grep -qE '\(deploy-svc\) NOPASSWD: /usr/local/bin/deploy$'; then
-    ok "deploy" "eric grant is exactly (deploy-svc) NOPASSWD: /usr/local/bin/deploy"
+  deploy_re='\(deploy-svc\)[[:space:]]+NOPASSWD:[[:space:]]+/usr/local/bin/deploy$'
+  notify_re='\(root\)[[:space:]]+NOPASSWD:[[:space:]]+/usr/local/bin/notify$'
+  broader="$(printf '%s\n' "$runlines" | grep -vE "$deploy_re" | grep -vE "$notify_re" | grep -c . || true)"
+  if printf '%s\n' "$runlines" | grep -qE "$deploy_re" && [ "${broader:-0}" -eq 0 ]; then
+    ok "deploy" "eric grant is exactly (deploy-svc) NOPASSWD: /usr/local/bin/deploy (plus the shared notify grant)"
   else
-    bad "deploy" "eric sudo grant is NOT exactly the one deploy line — BROADER/NARROWER/DRIFTED: $(printf '%s' "$runlines" | tr '\n' '|')"
+    bad "deploy" "eric sudo grant WRONG — deploy line missing or a BROADER/DRIFTED grant present: $(printf '%s' "$runlines" | tr '\n' '|')"
   fi
 
   # 2. The wrapper is deploy-svc/root-owned and NOT eric-writable — a mediated
@@ -196,22 +202,22 @@ else
       || ok "deploy" "$(basename "$p") unreadable by eric"
   done
 
-  # 4. The host allowlist equals the record and contains NO out-of-bound target
-  #    — the allowlist cannot silently grow to include an OUT target (§2).
-  HOST_ALLOW=/usr/local/lib/deploy/eric-deployable.allow
-  if sudo -n test -e "$HOST_ALLOW" 2>/dev/null; then
-    rec="$(git --git-dir=/opt/agent-os.git show HEAD:provisioning/eric-deployable.allow 2>/dev/null)"
-    live="$(sudo -n cat "$HOST_ALLOW" 2>/dev/null)"
-    [ -n "$rec" ] && [ "$live" = "$rec" ] \
-      && ok "deploy" "host allowlist matches record" \
-      || bad "deploy" "host allowlist DIFFERS from record (or record unreadable)"
-    if printf '%s\n' "$live" | sed -E 's/#.*//' | grep -qwE 'agent-os|ha-ops'; then
-      bad "deploy" "allowlist contains an OUT target (agent-os/ha-ops) — must stay human-gated"
-    else
-      ok "deploy" "allowlist contains no OUT target"
-    fi
+  # 4. The allowlist that BOUNDS the grant contains NO out-of-bound target. The
+  #    authoritative source is the substrate git record `deploy` itself reads
+  #    (deploy:112 — `git -C /opt/agent-os.git show HEAD:provisioning/eric-deployable.allow`,
+  #    parsed comments-stripped, whitespace-split, bare keys), NOT any host file:
+  #    a host `.allow` is not consumed by anything, so asserting it would guard the
+  #    wrong place. The bound rides the mirror doctor already proves running==committed
+  #    against, so it cannot silently grow to an OUT target without a recorded commit
+  #    (§2, criterion 3).
+  ALLOW_REC="$(git --git-dir=/opt/agent-os.git show HEAD:provisioning/eric-deployable.allow 2>/dev/null \
+                 | sed -E 's/#.*//' | tr -s ' \t' '\n' | grep -E '^[a-z0-9._-]+$' || true)"
+  if [ -z "$ALLOW_REC" ]; then
+    bad "deploy" "no eric-deployable allowlist in the substrate record — deploy would refuse everything; bound unverifiable"
+  elif printf '%s\n' "$ALLOW_REC" | grep -qxE 'agent-os|ha-ops'; then
+    bad "deploy" "substrate allowlist contains an OUT target ($(printf '%s\n' "$ALLOW_REC" | grep -xE 'agent-os|ha-ops' | tr '\n' ' ')) — must stay human-gated"
   else
-    bad "deploy" "deploy wrapper installed but no eric-deployable allowlist on host — grant is unbounded"
+    ok "deploy" "substrate allowlist bounded [$(printf '%s' "$ALLOW_REC" | tr '\n' ' ')] — no OUT target"
   fi
 fi
 
