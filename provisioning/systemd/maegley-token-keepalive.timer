@@ -2,12 +2,22 @@
 Description=Fire the agent token keep-alive well inside the ~8h token window (WR-013/ADR-0010 §6)
 
 [Timer]
-# Tokens last ~8h and refresh on use; fire every 4h so the credential never ages out
-# during a quiet period (comfortably inside the window, ADR-0010 §6). Run shortly after
-# boot too, and Persistent so a missed fire (host asleep) is caught on wake — the exact
-# quiet-period pattern this defends against.
-OnBootSec=10min
-OnUnitActiveSec=4h
+# ONCE DAILY — Steve's ruling 2026-08-25, on cost. The original 4h cadence was
+# chosen to fire inside the ~8h token window; daily deliberately does not, and the
+# reason that is acceptable is that the mechanism was MEASURED not to refresh
+# anything (WR-013 deploy record): expiry 1787695207635 before and after two runs
+# that both logged success, while Todd aged 3h->2h across a window with three
+# dispatches. A 4h cadence was paying four times a day for that.
+#
+# READ THIS BEFORE RESTORING 4h: daily CANNOT preserve an ~8h token — a full day
+# between fires means the credential expires long before the next one. So while
+# this timer is daily it is a cheap liveness probe, NOT the criterion-8 mechanism,
+# and WR-013 criterion 8 must not be claimed on it. If the refresh question is ever
+# answered YES (refresh is threshold-based and fires near expiry), the cadence must
+# go back inside the token window — daily is not a smaller version of the fix, it is
+# a different thing that does not fix it.
+OnCalendar=daily
+RandomizedDelaySec=30min
 Persistent=true
 
 [Install]
