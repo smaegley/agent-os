@@ -148,6 +148,39 @@ s['permissions'] = {
         # and agents working across two repos use -C constantly. Real reach is
         # bounded by filesystem permissions and deploy keys, not by this pattern.
         "Bash(git *)",
+        # GENERAL LOCAL BASH. Steve's ruling 2026-08-25, after the "no dispatched
+        # agent can execute anything" blocker was measured rather than inferred.
+        #
+        # It was never an execution-capability wall. A dispatched `claude -p`
+        # session runs commands fine -- `echo` ran, `bash -n` did not -- because
+        # the allowlist above was exactly two patterns. Eric could not run a
+        # syntax check, Randal could not run a suite, and Todd, the operator
+        # runtime built to be the answer, hit the same two-entry list. Four
+        # items sat `blocked/steve` on it. This is gap 1 in AGENT-RUNTIME.md
+        # ("a credential the agent is not permitted to invoke is not a
+        # credential") for the fourth time, generalised from ssh to bash.
+        #
+        # Narrow verb patterns were rejected for two reasons, both already
+        # documented here: they break on flag drift (gap 2), and QA run requests
+        # legitimately need `bash -c '<multi-line>'`, which is a general escape
+        # hatch whatever pattern wraps it. A narrow rule would have been broad
+        # by another name, minus the honesty.
+        #
+        # THIS GRANTS NOTHING PRIVILEGED. The boundary is the Unix user, and
+        # every part of it was re-verified the day this line was added:
+        #   - `Bash(sudo *)` below still denies, and deny beats allow
+        #   - home 0750; the agent cannot read /home/steve/.ssh
+        #   - prod is reachable only through ~/bin/prod, whose real restriction
+        #     is the host-side forced command, not this file
+        #   - /opt/agent-os.git is steve-owned and NOT writable by any agent, so
+        #     a local edit to plugins/ or the constitution reaches no one;
+        #     publish-substrate.sh holds an agent that is ahead for human merge
+        # The substrate Write/Edit denies below are now a second layer over that
+        # filesystem boundary rather than the only one. That is the intended
+        # order -- "client-side permissions are ergonomics; credentials are
+        # security" (AGENT-RUNTIME.md) -- and this line stops pretending
+        # otherwise at the cost of four blocked items.
+        "Bash",
     ],
     "deny": [
         "Bash(sudo *)",
