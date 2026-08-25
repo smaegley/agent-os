@@ -74,11 +74,11 @@ Live board: **http://10.0.1.128:8088/maegley-lab-board.html**
 | WR-002 | `hold` | — | LVM thin-pool guard |
 | WR-003 | `hold` | — | ha-triage retarget |
 | WR-007 | `hold` | — | record↔code link; misfiled migraine spec in ha-ops |
-| WR-006 | `blocked` | Steve | **Unblocked 2026-08-25** — Q2/Q3 legs now runnable unattended |
-| WR-009 | `blocked` | Steve | **Unblocked 2026-08-25** — fix-stage 2 is offline and now runnable. Cutover still held |
-| WR-011 | `blocked` | Steve | **Unblocked 2026-08-25.** Stage-1 Steps 2+3 now RUN and PASS via dispatch. Ready for `needs-exec/todd` per run-request-4 |
-| WR-012 | `blocked` | Steve | Stage 2 verifies a **sudo grant** — correctly needs Steve or the operator. NOT the blocker |
-| WR-013 | `design-ready` | Randal | **Conversational Todd in Slack** — Steve's current priority |
+| WR-006 | `needs-exec` | Todd | Routed 2026-08-25. Offline half runnable; six probes still need **Steve's Slack ID** (ADR-0002) and the redeploy is prod-touching — Todd escalates those |
+| WR-009 | `needs-exec` | Todd | Routed 2026-08-25. S1/S2 runnable; S0 liveness `stat`s `/home/steve/...` which agents cannot read **by design** — NOT RUN, not worked around. Cutover held at shadow |
+| WR-011 | `needs-exec` | Todd | Routed 2026-08-25. Steps 2+3 RUN and PASS via dispatch (operator spot-check); Step 1's suite at `1321ce2` still unrun — that is the substance |
+| WR-012 | `blocked` | Steve | **Deliberately not routed.** Stage 2 verifies a **sudo grant**; a no-sudo agent must not run it. Part A is operator-runnable now and settles criteria 2/3/4/5; Part B needs Steve's yes. **Request defect:** §A2/A4/A5/A6 are marked "Todd, unattended" but contain `sudo` |
+| WR-013 | `blocked` | Steve | **Conversational Todd in Slack** — Steve's priority. Row previously read `design-ready`/Randal; the item says `blocked`/`steve`. Seam is BUILT. Its offline unit tests were walled by the same allowlist and are **now runnable**; remaining gates are real — WR-011 approve path enabled, WR-009 §6.11 live, and Steve's yes on the operator deploy |
 
 ## Open decisions for Steve
 
