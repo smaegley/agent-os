@@ -1,4 +1,4 @@
-# State of the program — 2026-08-25
+# State of the program — 2026-08-25 (updated: THE BLOCKER resolved)
 
 Current-state handoff. `ROLLOUT.md` describes the original Phase A–D plan and is now historical;
 **this file is what is true.** Written so a fresh session can pick up from the repos rather than
@@ -74,48 +74,87 @@ Live board: **http://10.0.1.128:8088/maegley-lab-board.html**
 | WR-002 | `hold` | — | LVM thin-pool guard |
 | WR-003 | `hold` | — | ha-triage retarget |
 | WR-007 | `hold` | — | record↔code link; misfiled migraine spec in ha-ops |
-| WR-006 | `blocked` | Steve | intake + status COMPLETE. Question half: Q1 passed, **no leg runnable unattended** |
-| WR-009 | `blocked` | Steve | ADR-0009 fix merged, syntax-clean. **Fix-stage 2 un-runnable.** Cutover held |
-| WR-011 | `blocked` | Steve | Todd runtime provisioned and working. **Stage 1 NOT RUN a 4th time** |
-| WR-012 | `blocked` | Steve | Eric's deploy grant **provisioned and gates verified live**. Stage 2 un-runnable |
+| WR-006 | `blocked` | Steve | **Unblocked 2026-08-25** — Q2/Q3 legs now runnable unattended |
+| WR-009 | `blocked` | Steve | **Unblocked 2026-08-25** — fix-stage 2 is offline and now runnable. Cutover still held |
+| WR-011 | `blocked` | Steve | **Unblocked 2026-08-25.** Stage-1 Steps 2+3 now RUN and PASS via dispatch. Ready for `needs-exec/todd` per run-request-4 |
+| WR-012 | `blocked` | Steve | Stage 2 verifies a **sudo grant** — correctly needs Steve or the operator. NOT the blocker |
 | WR-013 | `design-ready` | Randal | **Conversational Todd in Slack** — Steve's current priority |
 
 ## Open decisions for Steve
 
 1. **None outstanding.** Step 9 was ruled 2026-08-21 (*"eric can deploy to prod"*), the LLM egress
-   accepted 2026-08-20, WR-013's scope settled 2026-08-25. The four `blocked/steve` items above are
-   **not decisions** — they are the execution wall below, mis-routed to Steve because `blocked`
-   means "needs Steve" and no other state fits "no agent can run this".
+   accepted 2026-08-20, WR-013's scope settled 2026-08-25, the Bash grant 2026-08-25.
+2. **Pending action, not a decision:** WR-006/009/011 are still sitting at `blocked/steve` even
+   though the reason is gone. They need re-routing to their real states — WR-011 to
+   `needs-exec/todd` per Eric's run-request-4. Flipping them fires live dispatches, so it is held
+   for Steve's go.
+3. **`blocked` is still overloaded.** It means "needs Steve", and it absorbed "no agent can run
+   this" for four days without anyone noticing the difference. Worth a distinct state.
 
-## THE BLOCKER — no dispatched agent can execute anything
+## THE BLOCKER — RESOLVED 2026-08-25. It was a two-entry allowlist, not a wall.
 
-**This is the one thing to fix.** Every `blocked/steve` item above reduces to it.
+**The diagnosis this file carried was wrong, and the correction made the fix small.**
 
-A dispatched `claude -p` session cannot run commands. Verified 2026-08-25 by asking a dispatched
-Todd to run `bash -n`:
+"No dispatched agent can execute anything" was inferred from `bash -n` being refused. Measured
+2026-08-25 in a dispatch-shaped session as Todd, the result is not what was recorded:
 
 ```
-The command was not approved, so I could not run it.
-BLOCKED
+echo hello-from-todd                 RAN     rc=0
+bash -n .../lib-dispatch.sh          DENIED
 ```
 
-Eric hit it, Randal hit it, and **Todd — the operator runtime built to be the answer — hits it too.**
-Eric's framing is exact: *"execution-capability block, not the request."*
+A dispatched `claude -p` session executes commands perfectly well. What it could not do was execute
+anything outside the **two** Bash patterns in the agent's `settings.json` — `Bash(git *)` and
+`Bash(~/bin/prod *)` — plus the CLI's own auto-approved safe set. Eric could not syntax-check,
+Randal could not run a suite, and Todd hit the same two entries. **Four items sat `blocked/steve` on
+a missing line in a config file.**
 
-**The operator's own misdiagnosis, recorded because it cost a day.** Todd's `bash -n` was tested via
-`sudo -u todd bash -lc …` and reported as working. That is **not the path a dispatch uses**. Running
-as a user and running inside that user's dispatched session are different things, and only the
-second one matters. The same lesson as the ten in the closing section, committed while writing about
-them.
+**This was already in the docs.** `AGENT-RUNTIME.md` gap 1 — *"a credential the agent is not
+permitted to invoke is not a credential"* — written about `ssh`, true verbatim of `bash`. Fourth
+instance of the class. And the doctrine that resolves it sits two paragraphs below it in the same
+file: *"client-side permissions are ergonomics; credentials are security. Do not confuse the two."*
 
-**Consequence:** the pipeline produces specs, ADRs, code and inspection verdicts, but **nothing can
-be executed, so nothing reaches `done`** without Steve or the interactive operator session running
-it by hand. It also undermines WR-013 directly — a conversational Todd who cannot run anything is a
-router with extra steps.
+**The fix** (Steve's ruling 2026-08-25): general local `Bash` in the allow list for all seven agents
+from the roster, `Bash(sudo *)` deny unchanged. Narrow verb patterns were rejected — they break on
+flag drift (gap 2), and QA run requests legitimately need `bash -c '<multi-line>'`, a general escape
+hatch whatever pattern wraps it.
+
+**Verified through the dispatch path, not a `sudo -u` shell** — the distinction this file paid a day
+to learn:
+
+```
+bash -n .../lib-dispatch.sh          RAN     rc=0
+python3 -c "print(1+1)"              RAN     rc=0  -> 2
+sudo -n true                         DENIED  by the permission layer (deny still beats allow)
+```
+
+Out of band: home 0750, agents cannot read ops keys, prod reachable only via the forced-command
+wrapper, and **`/opt/agent-os.git` is steve-owned and not writable by any agent** — so an agent's
+local edit to `plugins/` or the constitution reaches no one, and `publish-substrate.sh` holds an
+agent that is ahead for human merge. The substrate `Write/Edit` denies are now a second layer over a
+filesystem boundary that already holds, which is the intended order.
+
+**WR-011 stage 1 Steps 2 and 3 have now been run by Todd through a real dispatch**, and both pass on
+their pre-declared conditions — including Step 3, the one Eric flagged as possibly not runnable in
+isolation:
+
+```
+needs-exec-todd=[todd]   needs-exec-steve=[]   needs-exec-empty=[]   design-ready-todd=[randal]
+```
+
+**One caveat, and it is not this blocker.** WR-012 stage 2 verifies a *sudo grant* — it needs
+`sudo -u eric sudo -n -u deploy-svc ...`. A no-sudo agent cannot run that **by design**, and should
+not. That item stays with Steve or the interactive operator for correct reasons, not for this one.
+
+**The lesson, again, and it is the same one.** The blocker was diagnosed by observing a refusal and
+inferring a capability wall, without reading the config that produces refusals. One `cat` of
+`settings.json` would have ended it on day one. *Verify the thing that runs* has a twin: **read the
+thing that decides.**
 
 ## What is genuinely not built
 
-- **Agent execution capability** — the blocker above.
+- ~~**Agent execution capability**~~ — RESOLVED 2026-08-25, see above. Agents run local
+  bash; only genuinely privileged steps (WR-012 stage 2's sudo checks) still need Steve.
 - **Conversational Todd** — WR-013, `design-ready`, Steve's stated priority: *"until we get the
   Slack pipeline working properly, I'm not using it for anything."*
 - **Andrea (UAT)** — still unprovisioned. The human eye has now caught **four** defects every
