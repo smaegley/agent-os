@@ -1,0 +1,9 @@
+[Unit]
+Description=Watch the slack-bridge conversation-inbox and run Todd's next turn promptly
+
+[Path]
+DirectoryNotEmpty=/var/lib/slack-bridge/conversation-inbox
+Unit=slack-bridge-conversation-runner.service
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,14 @@
+[Unit]
+Description=Fire the agent token keep-alive well inside the ~8h token window (WR-013/ADR-0010 §6)
+
+[Timer]
+# Tokens last ~8h and refresh on use; fire every 4h so the credential never ages out
+# during a quiet period (comfortably inside the window, ADR-0010 §6). Run shortly after
+# boot too, and Persistent so a missed fire (host asleep) is caught on wake — the exact
+# quiet-period pattern this defends against.
+OnBootSec=10min
+OnUnitActiveSec=4h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
