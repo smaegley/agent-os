@@ -36,7 +36,7 @@ report() { # status detail  (status: up|down)
   [ "$status" = "$prev" ] && return 0        # no edge — stay quiet
   case "$status" in
     down) sudo -n /usr/local/bin/notify '#ops-prod' \
-            "Dispatcher watcher is DOWN — $detail. Event-driven dispatch is not firing; the reconcile sweep is still moving the backlog as the fallback, so nothing is stranded, but latency is back to the sweep interval until the watcher is restarted." \
+            "Dispatcher watcher is DOWN — $detail. Event-driven dispatch is not firing; the */15 cron dispatch.sh is still moving the backlog as the fallback, so nothing is stranded, but latency is back to the 15-min cron interval until the watcher is restarted." \
             >/dev/null 2>&1 || true ;;
     up)   [ "$prev" = down ] && sudo -n /usr/local/bin/notify '#ops-prod' \
             "Dispatcher watcher is back UP — event-driven dispatch restored ($detail)." \
