@@ -89,7 +89,7 @@ Todd, Eric, Theresa, John and Randal all dispatched, ran, committed and routed w
 |---|---|---|---|
 | WR-001 | `done` | — | HA config mirror. QA-verified, all 10 criteria |
 | WR-005 | `done` | — | Slack bridge transport. QA-verified |
-| WR-006 | `blocked` | Steve | **VERIFIED-COMPLETE — awaiting Steve's accept/close.** Eric passed all 14 criteria from committed evidence. Accepting delivered work is the raiser's call |
+| WR-006 | `accepted` | — | **CLOSED ON EVIDENCE 2026-08-26** — all 14 criteria QA-verified from committed run-output. Unlike WR-004, this one **may** be cited as a QA pass |
 | WR-004 | `accepted` | — | Proxmox POC. **Closed as-is by Steve — NOT verified.** Never cite as a QA pass |
 | WR-010 | `cancelled` | — | Recorder boot race. Reviewed and deliberately not done |
 | WR-002 | `hold` | — | LVM thin-pool guard |
@@ -103,8 +103,7 @@ Todd, Eric, Theresa, John and Randal all dispatched, ran, committed and routed w
 
 ## Open decisions for Steve
 
-1. **Accept and close WR-006.** Verified-complete by Eric against bars fixed before the evidence
-   existed. The only thing waiting on a human right now.
+1. **None outstanding.** WR-006 was accepted and closed on evidence 2026-08-26.
 2. **Criterion 8 / keep-alive cadence** — after Probe B lands (10:05 UTC). Probe A already showed no
    renewal on a healthy token; Probe B tests an expired one. Note daily cadence cannot preserve an ~8h
    token, so a "yes" from Probe B reopens the cadence question.
