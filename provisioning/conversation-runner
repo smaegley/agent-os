@@ -44,6 +44,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 import uuid
 
 INBOX = os.environ.get("CONVERSATION_INBOX",
@@ -57,6 +58,17 @@ SESSION_DIR = os.environ.get("CONVERSATION_SESSION_DIR",
 SPOOL_DIR = os.environ.get("CONVERSATION_SPOOL_DIR",
                            "/var/lib/conversation-runner/turns")
 TODD_USER = os.environ.get("TODD_USER", "todd")
+# The shared credit-hold gate (WR-014 / ADR-0011 §1). CONSUMED here, never forked
+# (WR-015, ADR-0012 §2): the runner only reads it — it sets/clears/GC's nothing.
+# Same path + default the dispatcher (lib-dispatch.sh) and board (board.sh) read,
+# so the three cannot disagree about whether a hold is in force.
+HOLDFILE = os.path.join(
+    os.environ.get("MAEGLEY_STATE", "/home/steve/.local/state/maegley"),
+    "credit-hold")
+# Render the reset time the SAME way the board banner does (board.sh:10/150):
+# `TZ=America/Denver date -d "@<epoch>" '+%H:%M %Z'`. Sharing the zone + format is
+# what keeps the reply and the banner from drifting (WR-015 AC4, ADR-0012 §5).
+BOARD_TZ = os.environ.get("MAEGLEY_TZ", "America/Denver")
 # One turn is one dispatch, bounded exactly like an agent run (ADR-0010 §1; the dispatch
 # default is 1800s — confirmed against lib-dispatch.sh).
 AGENT_TIMEOUT = int(os.environ.get("AGENT_TIMEOUT", "1800"))
@@ -79,6 +91,72 @@ _SAFE_THREAD = re.compile(r"[^0-9A-Za-z._-]")
 
 def _log(msg: str) -> None:
     sys.stderr.write("conversation-runner: %s\n" % msg)
+
+
+# --- shared credit-hold gate (WR-015 / ADR-0012) -----------------------------------
+# A pre-turn guard so a Slack message received while credits are exhausted spends
+# NO `claude -p` turn (WR-015 AC1). The runner is root, so it reads steve's 0700
+# hold file with a plain read — the `sudo -n cat` dance the todd-user sweep needs
+# is unnecessary here (ADR-0012 §1). It consumes the state; it never writes it.
+_HOLD_RESET_RE = re.compile(r"[0-9]+")
+# Wording invariants (spec §8 / ADR-0012 §5): states the system is paused/credits
+# exhausted, names the reset time drawn from the shared file, over-promises nothing
+# (does NOT claim this message is queued — acknowledge-now, no auto-replay). Slack
+# mrkdwn bold is single-asterisk. {when} is rendered from reset_epoch (AC4).
+_HOLD_REPLY = (
+    "⏸️ Credits are exhausted — I'm paused until *%s*. Send it "
+    "again after that and I'll pick it up."
+)
+
+
+def _credit_hold_status() -> tuple[str, int | None]:
+    """Classify the shared credit-hold state with the IDENTICAL test as
+    lib-dispatch.sh `credit_held()` (ADR-0012 §2): file exists AND line 1 is an
+    integer epoch AND now < reset. Returns (status, reset_epoch), status one of
+    "absent" | "malformed" | "expired" | "held".
+
+    Fail OPEN, loud (ADR-0012 §4): absent / expired / malformed / unreadable all
+    resolve to a normal turn — matching how `credit_held()` degrades and how
+    `credit_hold_gc()` treats a malformed file (removes it, resumes), so the
+    runner never becomes the lone reader saying "paused" while the board and
+    dispatcher say "running" (the drift AC4 forbids). The runner does NOT clear or
+    rewrite a malformed file — that is the dispatcher's `credit_hold_gc` job."""
+    try:
+        with open(HOLDFILE, encoding="utf-8") as fh:
+            first = fh.readline().strip()
+    except FileNotFoundError:
+        return "absent", None
+    except OSError as exc:
+        # As root a present file reads plainly, so this path is narrow; be loud.
+        _log("credit-hold file %s unreadable (%s) — treating as NOT held (fail "
+             "open, matching credit_held)" % (HOLDFILE, exc))
+        return "absent", None
+    if not _HOLD_RESET_RE.fullmatch(first):
+        _log("credit-hold file %s present but reset line %r is malformed — "
+             "treating as NOT held (fail open; the dispatcher's credit_hold_gc "
+             "clears it, not this runner)" % (HOLDFILE, first))
+        return "malformed", None
+    reset = int(first)
+    return ("held", reset) if int(time.time()) < reset else ("expired", reset)
+
+
+def _render_reset(reset_epoch: int) -> str:
+    """Render reset_epoch identically to the board banner (board.sh:150):
+    `TZ=America/Denver date -d "@<epoch>" '+%H:%M %Z'`, zone abbrev included. Shell
+    out to the same `date` the board uses so the reply and banner cannot drift
+    (AC4). If that fails, fall back to a raw epoch marker rather than guessing a
+    zone — still read-not-recomputed."""
+    env = dict(os.environ, TZ=BOARD_TZ)
+    try:
+        out = subprocess.run(
+            ["date", "-d", "@%d" % reset_epoch, "+%H:%M %Z"],
+            env=env, capture_output=True, text=True, check=True)
+        rendered = out.stdout.strip()
+        if rendered:
+            return rendered
+    except (OSError, subprocess.SubprocessError) as exc:
+        _log("could not render reset epoch %d via date: %s" % (reset_epoch, exc))
+    return "@%d" % reset_epoch
 
 
 # --- soft session map --------------------------------------------------------------
@@ -291,6 +369,30 @@ def _process(path: str) -> None:
 
     if not thread_ts:
         thread_ts = "nots-" + uuid.uuid4().hex[:8]   # never share a session by accident
+
+    # Pre-turn credit-hold guard (WR-015 / ADR-0012 §1). This is the FIRST thing
+    # done with a well-formed turn: while held, post ONE canned reply and finish
+    # the turn WITHOUT loading a session or reaching _run_todd — so no `claude -p`
+    # is spawned (AC1 holds by construction; the only conversational spawn is the
+    # :182 exec, and we return before it). Not held ⇒ fall through unchanged (AC3).
+    status, reset_epoch = _credit_hold_status()
+    if status == "held":
+        canned = _HOLD_REPLY % _render_reset(reset_epoch)
+        # Reply-or-loud-failure still applies (ADR-0012 §6): a held ack must not go
+        # silent because the outbox failed. Surface the failure loudly; the turn is
+        # still finished (removed below), exactly as the normal path treats its own.
+        try:
+            _write_outbox(channel, canned)
+            _log("credit hold in force (reset %d) — posted canned reply, spawned "
+                 "no turn (thread %s)" % (reset_epoch, thread_ts))
+        except OSError as exc:
+            _log("credit hold in force but could not post canned reply for thread "
+                 "%s: %s (turn %s)" % (thread_ts, exc, path))
+        try:
+            os.remove(path)
+        except OSError as exc:
+            _log("could not remove held turn %s: %s" % (path, exc))
+        return
 
     session_id = _load_session(thread_ts)
     reply, new_sid, resumed = _run_todd(text, thread_ts, session_id)
