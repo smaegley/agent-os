@@ -57,6 +57,18 @@ ALLOW_PATH="${ALLOW_PATH:-provisioning/eric-deployable.allow}"
 # and the local authoritative log.
 PROGRAM_CLONE="${PROGRAM_CLONE:-/var/lib/deploy/program}"
 PROGRAM_REMOTE="${PROGRAM_REMOTE:-origin}"
+# Delivery of the deploy-event record. The READ side above pulls the approval from
+# the local mirror (PROGRAM_REMOTE=origin, /srv/git/program.git). The WRITE side must
+# NOT push there: that mirror is force-synced from GitHub every ~2 min (it would
+# clobber a locally-pushed event) and is deploy-svc-unwritable anyway. The event goes
+# to the AUTHORITATIVE GitHub program record via a dedicated program-scoped, push-only
+# deploy key (0600, deploy-svc-held, read per-invocation, never eric's) — the org
+# custody rule, exactly as `intake`/`approve` push to `program` (ADR-0008 §5). The
+# operator provisions the URL + key at /etc/maegley-deploy.conf at deploy time; while
+# unprovisioned the event delivery WARNs loudly (install still durable, token consumed,
+# local record holds the truth) rather than silently pushing to a clobbered mirror.
+PROGRAM_PUSH_URL="${PROGRAM_PUSH_URL:-}"
+PROGRAM_DEPLOY_KEY="${PROGRAM_DEPLOY_KEY:-/var/lib/deploy/program-deploy.key}"
 STATE_DIR="${DEPLOY_STATE:-/var/lib/deploy/state}"
 CONSUMED_DIR="$STATE_DIR/consumed.d"
 DEPLOY_LOG="${DEPLOY_LOG:-$STATE_DIR/deploy.log}"
@@ -192,7 +204,7 @@ done < <(git -C "$SUBSTRATE_GIT" show "HEAD:$MANIFEST_PATH" 2>/dev/null)
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/deploy.XXXXXX")" || die 1 "cannot create staging dir"
 trap 'rm -rf "$TMP"' EXIT
 
-changed=0; unit_file_changed=0; declare -a UNITS=()
+changed=0; unit_file_changed=0; declare -a UNITS=(); declare -a RESTARTED=()
 for i in "${!hostpaths[@]}"; do
   hp="${hostpaths[$i]}"; rp="${repopaths[$i]}"
   stage="$TMP/stage.$i"
@@ -220,11 +232,15 @@ for i in "${!hostpaths[@]}"; do
     mv -f "$tmpf" "$hp" || die 1 "atomic swap failed for $hp"
     changed=$((changed+1))
     log "installed: $hp <- $ARTIFACT:${repopaths[$i]}@${match_sha:0:12}"
+    # A unit is a restart CANDIDATE only if its file actually changed. Collecting
+    # this INSIDE the changed branch (never unconditionally) is why an unchanged
+    # deploy touches and reports no unit — Defect 1 / criterion 6: the durable record
+    # must not claim a prod action (a restart) that never happened.
+    case "$hp" in
+      /etc/systemd/system/*.service|/etc/systemd/system/*.path)
+        unit_file_changed=1; UNITS+=("$(basename "$hp")") ;;
+    esac
   fi
-  case "$hp" in
-    /etc/systemd/system/*.service) unit_file_changed=1; UNITS+=("$(basename "$hp")") ;;
-    /etc/systemd/system/*.path)    unit_file_changed=1; UNITS+=("$(basename "$hp")") ;;
-  esac
 done
 
 # ---------------------------------------------------------------------------
@@ -236,15 +252,29 @@ done
 #    artifact touches no unit (criterion "no silent double-apply").
 # ---------------------------------------------------------------------------
 if [ "$changed" -gt 0 ]; then
-  [ "$unit_file_changed" = 1 ] && systemctl daemon-reload 2>>"$DEPLOY_LOG" || true
+  if [ "$unit_file_changed" = 1 ]; then
+    systemctl daemon-reload 2>>"$DEPLOY_LOG" || true
+  fi
+  # RESTARTED accumulates the units ACTUALLY restarted — the truthful "units
+  # restarted" set the record reports. A skipped oneshot or a failed restart is
+  # deliberately NOT added: the record must reflect what happened, not what was a
+  # candidate. (if/elif form, not `A && B || C`, so a failed log line can never fall
+  # through to the wrong branch — Todd's SC2015 note.)
   for u in ${UNITS[@]+"${UNITS[@]}"}; do
     case "$u" in
-      *.path) systemctl restart "$u" 2>>"$DEPLOY_LOG" && log "restarted (re-armed) $u" || log "WARN restart $u failed" ;;
+      *.path)
+        if systemctl restart "$u" 2>>"$DEPLOY_LOG"; then
+          RESTARTED+=("$u"); log "restarted (re-armed) $u"
+        else
+          log "WARN restart $u failed"
+        fi ;;
       *.service)
         if [ "$(systemctl show "$u" -p Type --value 2>/dev/null)" = oneshot ]; then
           log "skipped restart of oneshot $u (re-fires on its trigger)"
+        elif systemctl try-restart "$u" 2>>"$DEPLOY_LOG"; then
+          RESTARTED+=("$u"); log "try-restarted $u"
         else
-          systemctl try-restart "$u" 2>>"$DEPLOY_LOG" && log "try-restarted $u" || log "WARN try-restart $u failed"
+          log "WARN try-restart $u failed"
         fi ;;
     esac
   done
@@ -263,10 +293,13 @@ fi
 printf '%s\t%s\t%s\t%s\n' "$(date -Iseconds)" "$ARTIFACT" "$match_sha" "$match_item" > "$CONSUMED_DIR/$match_token"
 log "DEPLOYED $ARTIFACT @ ${match_sha:0:12} (${changed} file(s) changed) approval $match_token consumed [$match_item]"
 
-# The separate deploy-event record in the program record. Best-effort push: the
-# install is already done and the consumed marker + local log hold the truth, so a
-# push failure is a LOUD warning to reconcile, not a rollback (you cannot un-restart
-# a unit, and the local record preserves attribution).
+# The separate deploy-event record, delivered to the AUTHORITATIVE GitHub program
+# record — NOT the local mirror origin (PROGRAM_REMOTE), which is deploy-svc-unwritable
+# and force-synced from GitHub, so a push there fails or is clobbered (Defect 2). We
+# push over SSH with the dedicated program-scoped, push-only deploy key, exactly as
+# `intake`/`approve` write to `program` (ADR-0008 §5). The install is already done and
+# the consumed marker + local log hold the truth, so a delivery failure is a LOUD
+# warning to reconcile, not a rollback (you cannot un-restart a unit).
 DEPLOY_DIR="$PROGRAM_CLONE/projects/$match_proj/deploy"
 EVENT="$DEPLOY_DIR/$(date +%Y-%m-%d)-$(basename "$match_item" .md)-deploy.md"
 mkdir -p "$DEPLOY_DIR" 2>/dev/null || true
@@ -279,21 +312,36 @@ mkdir -p "$DEPLOY_DIR" 2>/dev/null || true
   echo "- deployed by: $AGENT (QA acting as deployer — see the separate qa/ verdict for what was *verified*)"
   echo "- files changed: $changed"
   echo "- host paths: ${hostpaths[*]}"
-  echo "- units restarted: ${UNITS[*]:-none}"
+  echo "- units restarted: ${RESTARTED[*]:-none}"
   echo "- approval token (consumed): $match_token"
   echo "- deployed at: $(date -Iseconds)"
 } > "$EVENT" 2>/dev/null || true
 
-if git -C "$PROGRAM_CLONE" add "$EVENT" 2>/dev/null \
-   && git -C "$PROGRAM_CLONE" -c user.name='deploy-svc' -c user.email='deploy-svc@maegley.local' \
-        commit -q -m "deploy: $ARTIFACT @ ${match_sha:0:12} by $AGENT ($match_token)" 2>/dev/null \
-   && git -C "$PROGRAM_CLONE" push -q "$PROGRAM_REMOTE" HEAD:main 2>/dev/null; then
-  log "deploy-event pushed to program: $EVENT"
+# Deliver via the push-only deploy key to the GitHub program record. Rebase the event
+# onto the push remote's current tip first (the untracked EVENT survives the reset) so
+# a mirror lag can never cause a non-fast-forward. On ANY failure: reset the clone
+# clean and WARN — the token is already consumed, so this never re-fires or rolls back.
+delivered=0
+if [ -n "$PROGRAM_PUSH_URL" ] && [ -r "$PROGRAM_DEPLOY_KEY" ]; then
+  DEPLOY_SSH="ssh -i $PROGRAM_DEPLOY_KEY -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+  if GIT_SSH_COMMAND="$DEPLOY_SSH" git -C "$PROGRAM_CLONE" fetch -q "$PROGRAM_PUSH_URL" main 2>/dev/null \
+     && git -C "$PROGRAM_CLONE" reset -q --hard FETCH_HEAD 2>/dev/null \
+     && git -C "$PROGRAM_CLONE" add "$EVENT" 2>/dev/null \
+     && git -C "$PROGRAM_CLONE" -c user.name='deploy-svc' -c user.email='deploy-svc@maegley.local' \
+          commit -q -m "deploy: $ARTIFACT @ ${match_sha:0:12} by $AGENT ($match_token)" 2>/dev/null \
+     && GIT_SSH_COMMAND="$DEPLOY_SSH" git -C "$PROGRAM_CLONE" push -q "$PROGRAM_PUSH_URL" HEAD:main 2>/dev/null; then
+    delivered=1
+  fi
+fi
+if [ "$delivered" = 1 ]; then
+  log "deploy-event pushed to the GitHub program record: $EVENT"
 else
-  echo "deploy: WARNING — install succeeded but the deploy-event push to program failed;" >&2
+  git -C "$PROGRAM_CLONE" reset -q --hard "$PROGRAM_REMOTE/main" 2>/dev/null || true
+  echo "deploy: WARNING — install succeeded but the deploy-event push to the program record failed;" >&2
+  echo "        (is PROGRAM_PUSH_URL set and PROGRAM_DEPLOY_KEY readable? see /etc/maegley-deploy.conf)" >&2
   echo "        local record is $DEPLOY_LOG and $CONSUMED_DIR/$match_token — reconcile the program record." >&2
-  log "WARN deploy-event push to program FAILED — local record holds the truth"
+  log "WARN deploy-event push to the GitHub program record FAILED — local record holds the truth"
 fi
 
-echo "deployed $ARTIFACT @ ${match_sha:0:12} ($changed file(s) changed, units: ${UNITS[*]:-none})"
+echo "deployed $ARTIFACT @ ${match_sha:0:12} ($changed file(s) changed, units: ${RESTARTED[*]:-none})"
 exit 0
