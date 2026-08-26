@@ -35,3 +35,37 @@ for a in $(agent_list); do
   sudo -u "$a" bash -c "cd /home/$a/work/agent-os && git reset -q --hard origin/main"
   printf '   %-8s %s\n' "$a" "$(sudo -u "$a" bash -c "cd /home/$a/work/agent-os && git rev-parse --short HEAD")"
 done
+
+# ---------------------------------------------------------------------------
+# Restart the long-running dispatcher if the code it LOADED has since moved.
+#
+# WHY THIS EXISTS: publishing updated every agent's clone and the mirror, and
+# restarted nothing -- so the one long-running consumer of this code kept running
+# whatever it loaded at start. It bit twice on 2026-08-26: the watcher ran
+# 3-day-old code through the WR-009 cutover, then ran pre-WR-014 code while 44
+# real credit exhaustions produced no hold, because the fix for exactly that was
+# published 31 minutes after the process started. A published fix that no running
+# process has loaded is indistinguishable from no fix at all.
+#
+# Scope is deliberately ONE unit. Every other consumer is a oneshot/.path runner
+# that re-execs per trigger and cannot go stale; slack-bridge is its own repo and
+# `deploy` already restarts units whose artifacts changed.
+WATCH_UNIT=maegley-dispatch-watch.service
+if systemctl is-active --quiet "$WATCH_UNIT" 2>/dev/null; then
+  started="$(date -d "$(systemctl show "$WATCH_UNIT" -p ActiveEnterTimestamp --value)" +%s 2>/dev/null || echo 0)"
+  newest=0
+  for f in "$SRC/provisioning/watch-dispatch.sh" "$SRC/provisioning/lib-dispatch.sh"; do
+    [ -f "$f" ] || continue
+    m="$(stat -c %Y "$f" 2>/dev/null || echo 0)"
+    [ "$m" -gt "$newest" ] && newest="$m"
+  done
+  if [ "$newest" -gt "$started" ]; then
+    if sudo -n systemctl restart "$WATCH_UNIT" 2>/dev/null; then
+      echo "   watcher  RESTARTED — it was running code older than this publish"
+    else
+      echo "   watcher  ! STALE and could not be restarted — it is running code older than this publish" >&2
+    fi
+  else
+    echo "   watcher  current"
+  fi
+fi

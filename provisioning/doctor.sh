@@ -290,6 +290,27 @@ if [[ "$hreset" =~ ^[0-9]+$ ]] && [ "$(date +%s)" -lt "$hreset" ]; then
 fi
 
 echo
+
+# --- loaded-process freshness -----------------------------------------------
+# running==committed is asserted for FILES; a long-running process that loaded an
+# older copy passes every file check while behaving like the old code. That gap
+# turned a published credit-hold fix into 44 wasted dispatches on 2026-08-26.
+_wu=maegley-dispatch-watch.service
+if systemctl is-active --quiet "$_wu" 2>/dev/null; then
+  _st="$(date -d "$(systemctl show "$_wu" -p ActiveEnterTimestamp --value)" +%s 2>/dev/null || echo 0)"
+  _nw=0
+  for _f in "$HERE/watch-dispatch.sh" "$HERE/lib-dispatch.sh"; do
+    [ -f "$_f" ] || continue
+    _m="$(stat -c %Y "$_f" 2>/dev/null || echo 0)"
+    [ "$_m" -gt "$_nw" ] && _nw="$_m"
+  done
+  if [ "$_nw" -gt "$_st" ]; then
+    bad "watcher" "running code OLDER than the checked-out dispatcher ($(( (_nw-_st)/60 ))m stale) — restart maegley-dispatch-watch"
+  else
+    ok "watcher" "running current dispatcher code"
+  fi
+fi
+
 if [ "$FAIL" = 0 ]; then
   echo "all invariants hold"
 else
