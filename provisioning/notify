@@ -38,7 +38,15 @@ case "$AGENT" in
   andrea)  NAME="Andrea";  ICON=":eyes:"         ;;  # UAT
   ken)     NAME="Ken";     ICON=":electric_plug:" ;;  # Hardware
   slack-bridge) NAME="Maegley Bridge"; ICON=":inbox_tray:" ;;  # the Slack bridge SERVICE — not an agent
-  steve|root) NAME="Todd"; ICON=":gear:"         ;;  # Ops
+  # The `todd` RUNTIME (WR-011, provisioned 2026-08-21). Added 2026-08-26: this case
+  # did not exist, so the runtime whose defining behaviour is escalate-to-Slack was
+  # refused by its own outbound path with "not a registered agent" — while the string
+  # "Todd" was already here, bound to steve|root from when Todd was Steve's operator
+  # persona rather than a Unix user. Third instance of one shape: a hardcoded list
+  # beside a roster nobody re-read after the roster changed (cf. agent_list's [a-z]+
+  # vs a capitalised AGENTS.md, and publish-substrate's second hardcoded list).
+  todd)    NAME="Todd";    ICON=":gear:"         ;;  # Ops — the dispatched runtime
+  steve|root) NAME="Todd"; ICON=":gear:"         ;;  # Ops — the operator acting as Todd
   *) echo "notify: '$AGENT' is not a registered agent (see AGENTS.md)" >&2; exit 77 ;;
 esac
 
