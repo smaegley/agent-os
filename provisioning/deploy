@@ -300,8 +300,32 @@ log "DEPLOYED $ARTIFACT @ ${match_sha:0:12} (${changed} file(s) changed) approva
 # `intake`/`approve` write to `program` (ADR-0008 §5). The install is already done and
 # the consumed marker + local log hold the truth, so a delivery failure is a LOUD
 # warning to reconcile, not a rollback (you cannot un-restart a unit).
+#
+# The event filename carries the consumed token, which is single-use (anti-replay), so
+# it is UNIQUE PER DEPLOY — even a second same-day deploy of the same item names a fresh
+# path, never colliding with an already-tracked prior event. This, plus writing the
+# event AFTER the fetch/reset below, closes Defect 2's second root cause: the old code
+# named the event `<date>-<item>-deploy.md` (not unique) and wrote it BEFORE the
+# `reset --hard`, so once that path was tracked from an earlier deploy the reset
+# discarded the fresh write and `commit` failed "nothing to commit" → lost record.
 DEPLOY_DIR="$PROGRAM_CLONE/projects/$match_proj/deploy"
-EVENT="$DEPLOY_DIR/$(date +%Y-%m-%d)-$(basename "$match_item" .md)-deploy.md"
+EVENT="$DEPLOY_DIR/$(date +%Y-%m-%d)-$(basename "$match_item" .md)-deploy-${match_token}.md"
+
+# Sync the clone to the push remote's tip FIRST, so the event is written on top of the
+# current GitHub record and a mirror lag can never cause a non-fast-forward. Crucially
+# the event is written AFTER this reset (below), so no reset can discard it.
+have_remote=0
+if [ -n "$PROGRAM_PUSH_URL" ] && [ -r "$PROGRAM_DEPLOY_KEY" ]; then
+  DEPLOY_SSH="ssh -i $PROGRAM_DEPLOY_KEY -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+  if GIT_SSH_COMMAND="$DEPLOY_SSH" git -C "$PROGRAM_CLONE" fetch -q "$PROGRAM_PUSH_URL" main 2>/dev/null \
+     && git -C "$PROGRAM_CLONE" reset -q --hard FETCH_HEAD 2>/dev/null; then
+    have_remote=1
+  fi
+fi
+
+# Write the event AFTER any reset. A token-unique, brand-new path means it is untracked
+# at this point, so even the reset above (or the next run's approval-refresh reset)
+# cannot discard it before it is committed and pushed.
 mkdir -p "$DEPLOY_DIR" 2>/dev/null || true
 {
   echo "# Deploy event — $ARTIFACT"
@@ -317,16 +341,13 @@ mkdir -p "$DEPLOY_DIR" 2>/dev/null || true
   echo "- deployed at: $(date -Iseconds)"
 } > "$EVENT" 2>/dev/null || true
 
-# Deliver via the push-only deploy key to the GitHub program record. Rebase the event
-# onto the push remote's current tip first (the untracked EVENT survives the reset) so
-# a mirror lag can never cause a non-fast-forward. On ANY failure: reset the clone
-# clean and WARN — the token is already consumed, so this never re-fires or rolls back.
+# Commit + push the freshly-written event via the push-only deploy key. On ANY failure
+# the event is LEFT in place as the local truth (untracked/uncommitted) and we WARN —
+# the token is already consumed, so this never re-fires or rolls back, and the next
+# run's approval-refresh reset (origin/main) cleans any dangling local state.
 delivered=0
-if [ -n "$PROGRAM_PUSH_URL" ] && [ -r "$PROGRAM_DEPLOY_KEY" ]; then
-  DEPLOY_SSH="ssh -i $PROGRAM_DEPLOY_KEY -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
-  if GIT_SSH_COMMAND="$DEPLOY_SSH" git -C "$PROGRAM_CLONE" fetch -q "$PROGRAM_PUSH_URL" main 2>/dev/null \
-     && git -C "$PROGRAM_CLONE" reset -q --hard FETCH_HEAD 2>/dev/null \
-     && git -C "$PROGRAM_CLONE" add "$EVENT" 2>/dev/null \
+if [ "$have_remote" = 1 ]; then
+  if git -C "$PROGRAM_CLONE" add "$EVENT" 2>/dev/null \
      && git -C "$PROGRAM_CLONE" -c user.name='deploy-svc' -c user.email='deploy-svc@maegley.local' \
           commit -q -m "deploy: $ARTIFACT @ ${match_sha:0:12} by $AGENT ($match_token)" 2>/dev/null \
      && GIT_SSH_COMMAND="$DEPLOY_SSH" git -C "$PROGRAM_CLONE" push -q "$PROGRAM_PUSH_URL" HEAD:main 2>/dev/null; then
@@ -336,11 +357,10 @@ fi
 if [ "$delivered" = 1 ]; then
   log "deploy-event pushed to the GitHub program record: $EVENT"
 else
-  git -C "$PROGRAM_CLONE" reset -q --hard "$PROGRAM_REMOTE/main" 2>/dev/null || true
   echo "deploy: WARNING — install succeeded but the deploy-event push to the program record failed;" >&2
   echo "        (is PROGRAM_PUSH_URL set and PROGRAM_DEPLOY_KEY readable? see /etc/maegley-deploy.conf)" >&2
-  echo "        local record is $DEPLOY_LOG and $CONSUMED_DIR/$match_token — reconcile the program record." >&2
-  log "WARN deploy-event push to the GitHub program record FAILED — local record holds the truth"
+  echo "        the event is held locally at $EVENT and in $DEPLOY_LOG / $CONSUMED_DIR/$match_token — reconcile the program record." >&2
+  log "WARN deploy-event push to the GitHub program record FAILED — local record holds the truth ($EVENT)"
 fi
 
 echo "deployed $ARTIFACT @ ${match_sha:0:12} ($changed file(s) changed, units: ${RESTARTED[*]:-none})"
