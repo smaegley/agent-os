@@ -275,6 +275,20 @@ else
   ok "todd" "token keep-alive timer not installed — quiet-period token expiry UNMITIGATED (WR-013/ADR-0010 §6); the expiry check above is the only backstop"
 fi
 
+# --- WR-014/ADR-0011: an active credit hold is EXPECTED, not a fault ----------
+# A hold pauses dispatch until credits return; it is correct behaviour, so this is
+# an `ok` line (never `bad`) — it must NOT flip doctor's exit code, or the daily
+# sweep would escalate every credit block to #ops-prod as a false alarm (spec
+# §5.6, ADR-0011 §7). The shared hold state lives in steve's MAEGLEY_STATE (0700),
+# so read it directly when doctor runs as steve, else via sudo (run by the sweep
+# as todd). Absence => no hold => no line, exactly as when idle.
+echo
+HOLDFILE="${MAEGLEY_STATE:-/home/steve/.local/state/maegley}/credit-hold"
+hreset="$( { cat "$HOLDFILE" 2>/dev/null || sudo -n cat "$HOLDFILE" 2>/dev/null; } | head -1 )"
+if [[ "$hreset" =~ ^[0-9]+$ ]] && [ "$(date +%s)" -lt "$hreset" ]; then
+  ok "dispatch" "credit hold ACTIVE — dispatch paused until $(date -d "@$hreset" '+%Y-%m-%d %H:%M %Z') (credits exhausted); expected, not a fault"
+fi
+
 echo
 if [ "$FAIL" = 0 ]; then
   echo "all invariants hold"

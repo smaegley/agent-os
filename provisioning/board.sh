@@ -137,11 +137,27 @@ else
   NEXT="NOT SCHEDULED — work only moves when dispatch.sh is run by hand"
 fi
 STAMP="$(date '+%-d %b %Y, %H:%M')"
+
+# WR-014/ADR-0011: a credit hold is GLOBAL, so it renders as a board-level banner
+# (not a per-item row) — visibly distinct from a per-item 'blocked' or operator
+# 'hold'. Read the same shared hold state every dispatcher reads, so page and
+# reality cannot drift. TZ is America/Denver above, so the reset shows in local.
+CREDITBANNER=""
+HOLDFILE="${MAEGLEY_STATE:-/home/steve/.local/state/maegley}/credit-hold"
+if [ -f "$HOLDFILE" ]; then
+  hreset="$(head -1 "$HOLDFILE" 2>/dev/null)"
+  if [[ "$hreset" =~ ^[0-9]+$ ]] && [ "$(date +%s)" -lt "$hreset" ]; then
+    when="$(date -d "@$hreset" '+%H:%M %Z')"
+    CREDITBANNER="<div class=\"credit-banner\">⏸ Dispatch paused — credits exhausted, resets <b>${when}</b>. No agent will be dispatched until then, and release then resumes gradually. This is the machine waiting for credit to return — not a blocked item and not one you parked.</div>"
+  fi
+fi
+
 ROWS="$ROWS" ACTIVITY="$ACTIVITY" MINE="$MINE" TOTAL="$TOTAL" STAMP="$STAMP" \
-LAST="$LAST" NEXT="$NEXT" TPL="$HERE/board-template.html" OUTF="$OUT" python3 - <<'PYEOF'
+LAST="$LAST" NEXT="$NEXT" CREDITBANNER="$CREDITBANNER" \
+TPL="$HERE/board-template.html" OUTF="$OUT" python3 - <<'PYEOF'
 import os, pathlib
 t = pathlib.Path(os.environ['TPL']).read_text()
-for k in ('ROWS','ACTIVITY','MINE','TOTAL','STAMP','LAST','NEXT'):
+for k in ('ROWS','ACTIVITY','MINE','TOTAL','STAMP','LAST','NEXT','CREDITBANNER'):
     t = t.replace(f'<!--{k}-->', os.environ.get(k, ''))
 pathlib.Path(os.environ['OUTF']).write_text(t)
 PYEOF

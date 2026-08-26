@@ -80,6 +80,29 @@ WORK_START="${WORK_START:-7}"; WORK_END="${WORK_END:-20}"   # inclusive, matches
 DRY_RUN="${DRY_RUN:-0}"                 # compute + report, touch nothing
 DISPATCH_SHADOW="${DISPATCH_SHADOW:-0}" # cutover stage 1: decide + log, dispatch NOTHING
 
+# ---------------------------------------------------------------------------
+# Credit-exhaustion hold (WR-014 / ADR-0011). A run that failed because there
+# was NO CREDIT is not a failed attempt: it must not clear its record (that is
+# ADR-0009's job for *genuine* failures) and must not be retried until credits
+# return. The whole mechanism is ONE shared file every dispatcher reads:
+#   HOLDFILE   line1=reset-epoch  line2=parsed|fallback  line3+=captured message
+# "Held" == the file exists AND now < reset-epoch. Expiry is a timestamp compare,
+# no daemon, no timer (ADR-0011 §1/§5/§9). LASTDISP records the epoch of the last
+# REAL dispatch under $LOCK; the standing RELEASE_SPACING gate reads it to keep N
+# items releasing gradually at reset rather than stampeding (ADR-0011 §6).
+HOLDFILE="$STATE_DIR/credit-hold"       # shared credit-hold gate (reset-epoch + message)
+LASTDISP="$STATE_DIR/last-dispatch-at"  # epoch of last real dispatch — the spacing gate reads it
+RELEASE_SPACING="${RELEASE_SPACING:-60}"      # min seconds between real starts. 60s => at most one
+                                              # start (one agent's fresh spend) in the first 60s after
+                                              # a hold lifts (AC3); at tens of seconds with a cap of 2
+                                              # and human-paced hops it never bites normal throughput.
+CONSERVATIVE_HOLD="${CONSERVATIVE_HOLD:-18000}"  # 5h — bounded hold when exhaustion is classified but
+                                                 # the reset time is UNPARSEABLE. Never unbounded, never
+                                                 # zero: format drift degrades SAFE (over-hold, loud).
+MAX_HOLD="${MAX_HOLD:-21600}"                    # 6h — a *parsed* reset further out than this is a
+                                                 # mis-parse (a 5h block never resets >6h away); clamp
+                                                 # to CONSERVATIVE_HOLD so a bad parse cannot over-hold.
+
 # Populated by evaluate_item for the caller to report on.
 EV_STATUS=""; EV_WHO=""; EV_REASON=""
 
@@ -175,6 +198,157 @@ already_dispatched() {
 record_dispatch()    { printf '%s\n' "$2" > "$RECDIR/$1"; }
 write_marker()       { printf '%s %s\n' "$2" "$(date +%s)" > "$RUNDIR/$1"; }
 
+# ---------------------------------------------------------------------------
+# Credit-exhaustion hold primitives (WR-014 / ADR-0011). All run as the
+# dispatcher user (steve) — the `sudo -u <agent>` in start_agent wraps ONLY the
+# agent command, never this logic, so writing/reading the hold under $STATE_DIR
+# (steve's) is a same-user operation.
+# ---------------------------------------------------------------------------
+log_dispatch() { echo "$(date -Iseconds) $*" >> "$REPO/log/dispatch.log" 2>/dev/null || true; }
+_fmt_utc()     { date -u -d "@$1" '+%F %H:%M UTC' 2>/dev/null || echo "@$1"; }
+
+# credit_held — true iff the shared hold file exists and its reset is still future.
+credit_held() {
+  [ -f "$HOLDFILE" ] || return 1
+  local reset; reset="$(head -1 "$HOLDFILE" 2>/dev/null)"
+  [[ "$reset" =~ ^[0-9]+$ ]] || return 1
+  [ "$(date +%s)" -lt "$reset" ]
+}
+credit_hold_reset_str() {  # short "HH:MM UTC" for the decision line
+  local reset; reset="$(head -1 "$HOLDFILE" 2>/dev/null)"
+  [[ "$reset" =~ ^[0-9]+$ ]] && date -u -d "@$reset" '+%H:%M UTC' 2>/dev/null || echo "?"
+}
+
+# credit_hold_gc — LIFT an expired hold, exactly once, loud. Expiry is a
+# timestamp comparison on shared state (no daemon, ADR-0011 §1). The atomic
+# rename makes exactly one racing dispatcher win the lift edge, so set/lift each
+# notify once (mirrors dispatch-health.sh's healthy<->down edge). A malformed
+# hold file is removed rather than held forever (fail toward NOT stuck-held).
+credit_hold_gc() {
+  [ -f "$HOLDFILE" ] || return 0
+  local reset; reset="$(head -1 "$HOLDFILE" 2>/dev/null)"
+  if ! [[ "$reset" =~ ^[0-9]+$ ]]; then
+    local bad="$HOLDFILE.malformed.$$"
+    mv "$HOLDFILE" "$bad" 2>/dev/null && { log_dispatch "dispatch: credit-hold file malformed (no reset epoch) — removed, dispatch resumes"; rm -f "$bad" 2>/dev/null; }
+    return 0
+  fi
+  [ "$(date +%s)" -ge "$reset" ] || return 0    # still held — nothing to do
+  local tomb="$HOLDFILE.lifting.$$"
+  if mv "$HOLDFILE" "$tomb" 2>/dev/null; then   # we won the lift edge
+    log_dispatch "dispatch: CREDIT HOLD LIFTED — reset $(_fmt_utc "$reset") reached; dispatch resumes (staggered, one start per ${RELEASE_SPACING}s)"
+    sudo -n /usr/local/bin/notify '#ops-prod' \
+      "Credits restored — dispatch resumed. Release is staggered (one start per ${RELEASE_SPACING}s) so the fresh block is not re-drained." \
+      >/dev/null 2>&1 || true
+    rm -f "$tomb" 2>/dev/null || true
+  fi
+}
+
+# credit_exhaustion_line — echo the CLI's OWN session-limit error line iff THIS
+# run's captured output ENDS with it; return 1 otherwise. This is the load-bearing
+# subtlety of the build (ADR-0011 §2/§9 "the trap"): it must key on the CLI's own
+# terminal signal, NEVER on the phrase occurring anywhere in a transcript — an
+# agent dispatched to build or verify WR-014 itself emits that exact string
+# (the spec, the ADR, and the work item all quote it). Two anchors distinguish
+# the CLI's own error from a quote of it:
+#   1. It is start-of-line (column 0) — the CLI prints its error bare; a quote in
+#      markdown is indented / blockquoted / inside a sentence.
+#   2. It is at the TAIL of output — the CLI's error is the LAST thing it prints,
+#      whereas a working agent that merely mentions the phrase keeps producing
+#      output afterwards (reads files, edits, commits).
+# Only reached on a NON-ZERO exit (a successful build exits 0 and never lands
+# here), so the false-positive surface is a genuine failure whose last lines
+# happen to be exactly this bare phrase — vanishingly unlikely. A false NEGATIVE
+# (format drift the matcher misses) degrades to ADR-0009's clear-and-retry — no
+# worse than today. Pin/confirm against a REAL captured message (spec §7 q2).
+credit_exhaustion_line() { # captured-output-file
+  local f=$1 line
+  [ -s "$f" ] || return 1
+  line="$(grep -vE '^[[:space:]]*$' "$f" | tail -3 \
+          | grep -m1 -E "^You've hit your session limit.*resets ")"
+  [ -n "$line" ] || return 1
+  printf '%s' "$line"
+}
+credit_exhaustion() { credit_exhaustion_line "$1" >/dev/null 2>&1; }
+
+# parse_reset_epoch — resolve "resets 10:30pm (UTC)" to the next future epoch that
+# matches that wall-clock time IN THE STATED ZONE (never the box zone), per
+# ADR-0011 §5. Echoes the epoch on success; returns 1 if the form is not present
+# (caller then applies the conservative fallback). Never a fixed backoff — the
+# message states the answer.
+parse_reset_epoch() { # message
+  local msg="$1" t zone now cand
+  [[ "$msg" =~ resets[[:space:]]+([0-9]{1,2}(:[0-9]{2})?[[:space:]]*([AaPp][Mm])?)[[:space:]]*\(([A-Za-z0-9_/+-]+)\) ]] || return 1
+  t="${BASH_REMATCH[1]}"; zone="${BASH_REMATCH[4]}"
+  # normalize "10:30pm" -> "10:30 PM" so GNU date parses it
+  t="$(printf '%s' "$t" | sed -E 's/([0-9])[[:space:]]*([AaPp][Mm])/\1 \U\2/')"
+  now="$(date +%s)"
+  cand="$(TZ="$zone" date -d "$t" +%s 2>/dev/null)" || return 1
+  [[ "$cand" =~ ^[0-9]+$ ]] || return 1
+  # next future instant matching that wall-clock time (handles a reset past
+  # midnight: "02:00" while it is 23:00 rolls forward to tomorrow's 02:00)
+  if [ "$cand" -le "$now" ]; then
+    cand="$(TZ="$zone" date -d "$t tomorrow" +%s 2>/dev/null)" || return 1
+    [[ "$cand" =~ ^[0-9]+$ ]] || return 1
+  fi
+  printf '%s' "$cand"
+}
+
+# set_credit_hold — write the shared hold from a classified-exhaustion run, loud,
+# with the SET edge fired exactly once. Parses the reset (conservative bounded
+# fallback if unparseable or a mis-parse; no hold at all if the reset is already
+# past — credits are back). The check-and-create is under $LOCK so concurrent
+# detection converges on one hold and one set-notify (ADR-0011 §5).
+set_credit_hold() { # captured-output-file
+  local out=$1 msg reset parse now
+  msg="$(credit_exhaustion_line "$out")"
+  now="$(date +%s)"
+  if reset="$(parse_reset_epoch "$msg")"; then
+    parse=parsed
+    if [ "$reset" -le "$now" ]; then
+      log_dispatch "dispatch: credit exhaustion detected but stated reset is already past [$msg] — credits presumed back, no hold set"
+      return 0
+    fi
+    if [ $(( reset - now )) -gt "$MAX_HOLD" ]; then
+      log_dispatch "dispatch: credit exhaustion — parsed reset $(_fmt_utc "$reset") is >${MAX_HOLD}s out (suspect parse) — clamping to conservative ${CONSERVATIVE_HOLD}s hold"
+      reset=$(( now + CONSERVATIVE_HOLD )); parse=fallback
+    fi
+  else
+    parse=fallback
+    reset=$(( now + CONSERVATIVE_HOLD ))
+    log_dispatch "dispatch: credit exhaustion detected but reset time UNPARSEABLE from [$msg] — applying conservative ${CONSERVATIVE_HOLD}s hold (until $(_fmt_utc "$reset"))"
+  fi
+
+  local won
+  won="$(
+    {
+      flock 9 || exit 0
+      [ -e "$HOLDFILE" ] && exit 0          # already held — converge, no new edge
+      local tmp="$HOLDFILE.tmp.$$"
+      printf '%s\n%s\n%s\n' "$reset" "$parse" "$msg" > "$tmp" 2>/dev/null \
+        && mv -f "$tmp" "$HOLDFILE" 2>/dev/null && echo won
+      rm -f "$tmp" 2>/dev/null || true
+    } 9>"$LOCK"
+  )"
+
+  if [ "$won" = won ]; then
+    log_dispatch "dispatch: CREDIT HOLD SET — dispatch paused, credits exhausted; resets $(_fmt_utc "$reset") [$parse]. No agent dispatched until then."
+    sudo -n /usr/local/bin/notify '#ops-prod' \
+      "Dispatch paused — credits exhausted, resets $(credit_hold_reset_str) ($(date -d "@$reset" '+%H:%M %Z')). No agent dispatched until then; the board and doctor show the hold, release is staggered." \
+      >/dev/null 2>&1 || true
+  else
+    log_dispatch "dispatch: credit exhaustion detected; hold already active — converged, no new edge"
+  fi
+}
+
+# restore_record — roll the dispatch record back to its pre-attempt value so an
+# exhausted attempt leaves NO phantom: neither a consumed attempt nor a stale
+# suppressor (ADR-0011 §4). In the common first-dispatch case (no prior record)
+# this removes the record start_agent's caller just wrote.
+restore_record() { # id rec_existed rec_value
+  if [ "$2" = 1 ]; then printf '%s\n' "$3" > "$RECDIR/$1" 2>/dev/null || true
+  else rm -f "$RECDIR/$1" 2>/dev/null || true; fi
+}
+
 # Reap crash orphans: a marker whose agent was killed between "start" and the
 # EXIT-trap cleanup would otherwise wedge that agent's mutex forever. The batch
 # never had this hazard (the whole-run flock + wait cleaned up); the re-scoped
@@ -240,8 +414,8 @@ resolve_target() { # id proj state infra uf adr owner
 # agent survives a service exit/restart; a marker orphaned by an uncleanly-killed
 # agent is reaped by MARKER_TTL in the next sweep.
 # ---------------------------------------------------------------------------
-start_agent() { # id file state who
-  local id=$1 f=$2 state=$3 who=$4
+start_agent() { # id file state who [rec_existed] [rec_value]
+  local id=$1 f=$2 state=$3 who=$4 rec_existed=${5:-0} rec_value=${6:-}
   # Steve asked for start visibility explicitly ("I see messages from each
   # person when they start"); completions alone were argued and overruled.
   sudo -n /usr/local/bin/notify '#program' \
@@ -271,10 +445,16 @@ start_agent() { # id file state who
   # runs as steve, so globbing the agent's work dir from out here silently yields
   # nothing and the flag becomes a no-op — the same shape of failure as the bug
   # it is fixing.
-  { sudo -u "$who" bash -lc "cd /home/$who/work/program && git pull -q origin main 2>/dev/null; \
-    ADDDIRS=(); for d in \"/home/$who/work\"/*/; do [ -d \"\$d/.git\" ] || continue; \
-      case \"\$d\" in */program/) continue ;; esac; ADDDIRS+=( --add-dir \"\${d%/}\" ); done; \
-    timeout "$AGENT_TIMEOUT" claude \"\${ADDDIRS[@]}\" -p \"You are ${who^}. Work item ${id} is in state '${state}' and routed to you.
+  # The run's output is captured to a PER-RUN file (not streamed straight into the
+  # shared dispatch.log) so exhaustion can be classified against THIS run's own
+  # output, not by grepping a log many runs write to (ADR-0011 §2, Constraints).
+  # The capture is appended to dispatch.log afterward, so the log still carries it.
+  {
+    cap="$(mktemp "${TMPDIR:-/tmp}/maegley-run-${id}.XXXXXX" 2>/dev/null)" || cap=/dev/null
+    if sudo -u "$who" bash -lc "cd /home/$who/work/program && git pull -q origin main 2>/dev/null; \
+      ADDDIRS=(); for d in \"/home/$who/work\"/*/; do [ -d \"\$d/.git\" ] || continue; \
+        case \"\$d\" in */program/) continue ;; esac; ADDDIRS+=( --add-dir \"\${d%/}\" ); done; \
+      timeout "$AGENT_TIMEOUT" claude \"\${ADDDIRS[@]}\" -p \"You are ${who^}. Work item ${id} is in state '${state}' and routed to you.
 
 Read ${f} in full, then do YOUR role's part of it — no more.
 
@@ -293,16 +473,33 @@ claiming work that is not committed:
 
 If you cannot complete it, set state to 'blocked', say why in the item, commit, and stop.
 Do not route it onward yourself and do not do another role's work.\" < /dev/null" \
-    >> "$REPO/log/dispatch.log" 2>&1 \
-      || rm -f "$RECDIR/$id"; rm -f "$RUNDIR/$id"; } &
-  # ^ A FAILED agent run clears its dispatch record so the item can be retried.
-  # The record is written when dispatch STARTS, so without this a run that dies
-  # instantly still marks the transition "done" and suppresses every retry at
-  # that state -- permanently and silently, since nothing reports the failure.
-  # Hit three times in twelve hours on WR-011 (arg-parsing death, then an expired
-  # token, then again after re-auth) and cleared by hand each time. The
-  # anti-self-trigger property is unaffected: a SUCCESSFUL run keeps its record,
-  # and a run that changes state makes the old record irrelevant anyway.
+      > "$cap" 2>&1; then
+      cat "$cap" >> "$REPO/log/dispatch.log" 2>/dev/null || true
+      rm -f "$RUNDIR/$id"                       # success — release marker, keep record (anti self-trigger)
+    else
+      cat "$cap" >> "$REPO/log/dispatch.log" 2>/dev/null || true
+      if credit_exhaustion "$cap"; then
+        # CREDIT EXHAUSTION — the work never ran, so it is NOT a failed attempt
+        # (ADR-0011 §2/§4). ORDER MATTERS: set the hold FIRST (it, not the record,
+        # owns retry-suppression, and being the first guard it closes the window
+        # before any dispatcher can act on the restored item), THEN release the
+        # marker and ROLL THE RECORD BACK to its pre-attempt value.
+        set_credit_hold "$cap"
+        rm -f "$RUNDIR/$id"
+        restore_record "$id" "$rec_existed" "$rec_value"
+      else
+        # GENUINE FAILURE — ADR-0009 UNCHANGED: clear the record so the item can be
+        # retried, release the marker, retry next tick. Without this a run that dies
+        # instantly marks the transition "done" and suppresses every retry at that
+        # state -- permanently and silently. Hit three times in twelve hours on
+        # WR-011. The anti-self-trigger property is intact: a SUCCESSFUL run keeps
+        # its record, and a run that changes state makes the old record irrelevant.
+        rm -f "$RECDIR/$id"
+        rm -f "$RUNDIR/$id"
+      fi
+    fi
+    [ "$cap" = /dev/null ] || rm -f "$cap" 2>/dev/null || true
+  } &
   disown 2>/dev/null || true
 }
 
@@ -324,6 +521,18 @@ dispatch_one() { # id file state who [transition_confirmed]
   # stateless backstop's, not the watcher's. dispatch.sh passes 0 (or omits it)
   # and keeps consulting the now-TTL-bounded record.
   local id=$1 f=$2 state=$3 who=$4 transition=${5:-0} decision
+
+  # Lift an expired hold (loud, once) before deciding — so a resumed block is
+  # announced and the guard below sees the file gone. Cheap and idempotent: the
+  # first call per tick wins the rename, the rest are no-ops (ADR-0011 §1/§5).
+  credit_hold_gc
+
+  # The dispatch record's PRE-ATTEMPT value, captured for the exhaustion rollback
+  # (ADR-0011 §4). item_busy guards a concurrent dispatch of the same id, so this
+  # read is stable across the write we are about to do under the lock.
+  local rec_existed=0 rec_value=""
+  [ -f "$RECDIR/$id" ] && { rec_existed=1; rec_value="$(cat "$RECDIR/$id" 2>/dev/null)"; }
+
   # The fd-9 redirection MUST be inside the command substitution, on the brace
   # group, so flock locks the subshell's fd — not outside, where it would be
   # string text. flock is blocking here (no -n): a competing dispatcher waits
@@ -331,23 +540,43 @@ dispatch_one() { # id file state who [transition_confirmed]
   decision="$(
     {
       flock 9 || exit 0
+      # Credit hold FIRST — same side of the boundary as DISPATCH_SHADOW (proven
+      # to spawn zero `claude -p`) and before any marker/record write, so a hold
+      # spends nothing (ADR-0011 §1, spec §5.3). Reported, never silent (§5.5).
+      if credit_held;                then echo "credit-held:$id [$state] → $who (resets $(credit_hold_reset_str))"; exit 0; fi
       if item_busy "$id";            then echo "held:$id [$state] → $who (item already running)"; exit 0; fi
       if [ "$transition" != 1 ] && already_dispatched "$id" "$state"; then echo "held:$id [$state] → $who (already dispatched this transition)"; exit 0; fi
       if agent_busy "$who";          then echo "held:$id [$state] → $who ($who already busy)"; exit 0; fi
       if [ "$(inflight_count)" -ge "$MAX_INFLIGHT" ]; then echo "held:$id [$state] → $who (in-flight cap $MAX_INFLIGHT reached)"; exit 0; fi
       if [ "$DISPATCH_SHADOW" = 1 ]; then echo "shadow:$id [$state] → $who (would dispatch)"; exit 0; fi
       if [ "$DRY_RUN" = 1 ];        then echo "dry:$id [$state] → $who (would dispatch)"; exit 0; fi
+      # Standing RELEASE_SPACING — a rate limit on REAL starts, enforced in the
+      # same locked section as the marker/record writes and read by whichever of
+      # {watcher,sweep,cron} runs, so N items at reset become N staggered starts,
+      # not one burst, regardless of how many dispatchers fire (ADR-0011 §6). Not
+      # applied to shadow/dry: those report intent and spend nothing.
+      local now last; now="$(date +%s)"; last="$(cat "$LASTDISP" 2>/dev/null)"
+      [[ "$last" =~ ^[0-9]+$ ]] || last=0
+      if [ $(( now - last )) -lt "$RELEASE_SPACING" ]; then
+        echo "held:$id [$state] → $who (release spacing ${RELEASE_SPACING}s — $(( RELEASE_SPACING - (now - last) ))s to next start)"; exit 0
+      fi
       write_marker "$id" "$who"
       record_dispatch "$id" "$state"
+      printf '%s\n' "$now" > "$LASTDISP"
       echo "go:$who"
     } 9>"$LOCK"
   )"
 
   case "$decision" in
-    go:*)      start_agent "$id" "$f" "$state" "$who"; EV_STATUS=routed; EV_WHO=$who
-               EV_REASON="$id [$state] → $who"; return 0 ;;
+    go:*)      start_agent "$id" "$f" "$state" "$who" "$rec_existed" "$rec_value"
+               EV_STATUS=routed; EV_WHO=$who; EV_REASON="$id [$state] → $who"; return 0 ;;
     shadow:*)  EV_STATUS=shadow; EV_WHO=$who; EV_REASON="${decision#shadow:}"; return 0 ;;
     dry:*)     EV_STATUS=dry;    EV_WHO=$who; EV_REASON="${decision#dry:}";    return 0 ;;
+    # A credit hold is loud and caller-independent: log it here so it appears in
+    # dispatch.log on EVERY tick it defers a dispatch (§5.5 — a hold must never be
+    # inferable only from the absence of dispatch lines), whichever dispatcher ran.
+    credit-held:*) EV_STATUS=credit-held; EV_WHO=$who; EV_REASON="${decision#credit-held:}"
+               log_dispatch "dispatch: credit-held $EV_REASON"; return 1 ;;
     held:*)    EV_STATUS=held;   EV_WHO=$who; EV_REASON="${decision#held:}";   return 1 ;;
     *)         EV_STATUS=held;   EV_WHO=$who; EV_REASON="$id lock unavailable"; return 1 ;;
   esac

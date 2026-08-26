@@ -31,6 +31,13 @@
              padding:.85rem 1.1rem; display:flex; align-items:baseline; gap:.6rem; flex-wrap:wrap; }
   .callout b { font-family:var(--mono); font-size:1.5rem; color:var(--you); line-height:1; }
 
+  /* WR-014/ADR-0011: a global credit hold — distinct from a per-item blocked/hold.
+     Red-edged and full-width so a reader sees "the machine is waiting for credit"
+     at a glance, not "someone parked an item". */
+  .credit-banner { margin-top:1rem; background:#5A1E1E; color:#F7E4E4; border-left:4px solid #E05252;
+                   border-radius:3px; padding:.85rem 1.1rem; font-family:var(--mono); font-size:.9rem; line-height:1.5; }
+  .credit-banner b { color:#FFF; }
+
   .scroll { overflow-x:auto; }
   table { border-collapse:collapse; width:100%; font-size:.87rem; }
   th,td { text-align:left; padding:.55rem .7rem; border-bottom:1px solid var(--rule); vertical-align:top; }
@@ -87,6 +94,8 @@
 
 <div class="callout"><b><!--MINE--></b> <span>of <!--TOTAL--> work items are waiting on you.
 Everything else is moving without you.</span></div>
+
+<!--CREDITBANNER-->
 
 <h2>Work board</h2>
 <div class="scroll">

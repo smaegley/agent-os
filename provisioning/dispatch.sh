@@ -66,6 +66,7 @@ flock -n 8 || { echo "dispatch: another sweep holds the lock — skipping"; exit
 cd "$REPO" || { echo "dispatch: no repo at $REPO" >&2; exit 1; }
 
 dispatch_state_init
+credit_hold_gc          # lift an expired credit hold (loud, once) even if the queue is idle
 reap_stale_markers      # crash-orphaned markers wedge an agent's mutex — reap them
 prune_records           # keep dispatched.d from growing without bound
 
@@ -104,6 +105,7 @@ for f in $ORDERED; do
     routed)        ROUTED+="  $EV_REASON"$'\n' ;;
     shadow)        SHADOW+="  $EV_REASON"$'\n' ;;
     dry)           ROUTED+="  $EV_REASON"$'\n' ;;
+    credit-held)   STOPPED+="  credit-held: $EV_REASON"$'\n' ;;   # WR-014: paused for credit
     held|stopped)  STOPPED+="  $EV_REASON"$'\n' ;;
     unprovisioned) UNPROVISIONED+="  $EV_REASON"$'\n' ;;
     blocked)       BLOCKED+="  $EV_REASON"$'\n' ;;
