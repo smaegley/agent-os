@@ -83,12 +83,30 @@ When you reach a step you may not execute, escalate — do not park silently:
    command channel is on its allowlist — never DM, never a new channel). Include the token
    and instruct Steve to reply **`approve <token>`** (the reliable form; a bare "yes"
    without the token cannot be bound and will be rejected).
-5. **Leave the item `needs-exec`, owner `steve`** — visibly waiting on Steve. Then stop.
-   Do **not** age the ask toward execution; an unanswered ask waits.
+5. **Confirm `notify` actually delivered before you treat the ask as escalated.** Composing
+   an ask and *sending* it are not the same act. `notify` runs under `sudo -n` and can fail
+   or be refused — no grant, no sudoers line, a bad channel, a network error — so **check
+   its exit status and output**, do not assume it went out.
+   - **On delivery (exit 0):** leave the item `needs-exec`, owner `steve` — visibly waiting
+     on Steve — and record in the item that the ask was escalated to the command channel.
+     Then stop. Do **not** age the ask toward execution; an unanswered ask waits.
+   - **On a failed or refused `notify`: be loud, and never claim you escalated.** Steve did
+     **not** receive the ask, so the item must not read as *waiting on Steve* — recording
+     "escalated" / "asked Steve" when no message was delivered is the program's signature
+     failure (reporting an act you did not perform), and it lands on the very path that
+     exists to *break* silence. Instead: record the delivery failure **verbatim** (the
+     command, its exit status, its stderr) in the item, set the item **`blocked`** with a
+     reason naming the undelivered ask and that it needs a human at the keyboard — the same
+     loud, attributed stall you use for a human-only class — and stop. Never leave an
+     undelivered ask reading as escalated.
 
 Steve's approval flows back through the bridge → approval-runner → the release-only
 `approve` command, which flips `owner: steve → todd`, sets `pending_ask_state: approved`,
-and stamps `approved_step`. The dispatcher observes that move and **re-triggers you.**
+and stamps `approved_step`. Note this changes `owner`/`pending_ask_state` but **leaves
+`state: needs-exec` unchanged** — and the event watcher (`watch-dispatch.sh`) fires only on
+a `state:` transition, so it does **not** see the release. Your re-dispatch therefore falls
+to the periodic dispatcher (cron) sweep, which picks the approved item up on its next tick.
+Expect the resume on that cadence, **not** instantly on Steve's reply.
 
 ## On resume (you are re-dispatched, the item now approved)
 
