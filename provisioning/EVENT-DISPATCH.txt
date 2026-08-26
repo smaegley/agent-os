@@ -156,3 +156,64 @@ Specifically Eric/operator to confirm on the host:
     mutex), 8 (cap), 9 (sweep backstop), 10 (crash recovery), 11 (health fires), 13 (origin-not-
     local), 14 (safe cutover), by exercising the running system per the run-request protocol.
 This build claims NO acceptance criterion met.
+
+===============================================================================================
+6. WR-014 / ADR-0011 — CREDIT-EXHAUSTION HOLD  (added on top of the above; nothing else changed)
+===============================================================================================
+THE DEFECT: a run that died because the 5-hour credit block was exhausted looked exactly like a
+transient failure (non-zero exit in ~1s), so ADR-0009's failed-run record-clear re-armed the queue
+every tick, and five suppressed items stampeded the instant the block reset. The fix: credit
+exhaustion is NOT a failed attempt. One shared credit-hold gate, set by classifying the CLI's own
+session-limit signal, honoured first in the guard chain, expiring at the stated reset, released
+rate-limited, and loud on three surfaces. ADR-0009 is preserved for GENUINE failures — narrowed
+only by subtracting the exhaustion case.
+
+NEW SHARED STATE (under MAEGLEY_STATE, alongside running.d/ dispatched.d/ etc.):
+  credit-hold        line1 = reset epoch, line2 = parsed|fallback, line3+ = the captured message.
+                     "Held" == file exists AND now < reset epoch. Expiry is a timestamp compare —
+                     no daemon, no timer. Lifted (loud, once) by credit_hold_gc via atomic rename.
+  last-dispatch-at   epoch of the last REAL dispatch, written under $LOCK; the spacing gate reads it.
+
+NEW DESIGN-DETAIL VALUES (ADR-0011 left these to the implementer; all ENV-overridable):
+  RELEASE_SPACING   = 60 s      min seconds between real starts. 60 => at most one start (one agent's
+                                fresh spend) in the first 60 s after a hold lifts (AC3). Standing (not
+                                armed only post-hold): it also coordinates multiple dispatchers at all
+                                times, and at tens of seconds with cap=2 + human-paced hops never bites.
+  CONSERVATIVE_HOLD = 18000 s   5 h — bounded hold when exhaustion is classified but the reset time is
+                                UNPARSEABLE. Never unbounded, never zero: format drift degrades SAFE.
+  MAX_HOLD          = 21600 s   6 h — a *parsed* reset further out than this is a mis-parse (a 5 h block
+                                never resets >6 h away); clamp to CONSERVATIVE_HOLD. In the live path
+                                the reset is always <=5 h out, so a fresh legit parse never clamps.
+
+DETECTION — THE LOAD-BEARING SUBTLETY (ADR-0011 §2/§9 "the trap"): classify the CLI's OWN terminal
+signal, NEVER grep the transcript for the phrase. An agent dispatched to build or verify WR-014
+emits "You've hit your session limit ..." in its transcript (the spec/ADR/work-item all quote it);
+a loose grep would freeze the org on its own fix. credit_exhaustion_line() keys on two anchors that
+distinguish the CLI's own error from a quote of it: (1) column-0 start, and (2) at the TAIL of the
+run's own captured output (a working agent keeps emitting after any quote). Only reached on a
+non-zero exit. False negative -> ADR-0009 clear-and-retry (no regression). Pin/confirm the matcher
+against a REAL captured message (spec §7 q2) — the only sample this build had is the one in WR-014.
+
+WHERE IT LIVES: guard + primitives in lib-dispatch.sh (credit_held / credit_hold_gc /
+credit_exhaustion_line / parse_reset_epoch / set_credit_hold / restore_record); detection + rollback
+in start_agent; the credit-held first-guard + the RELEASE_SPACING gate in dispatch_one; the loud
+surfaces in dispatch.sh + watch-dispatch.sh (log), doctor.sh (ok-line, no escalation), board.sh
+(board-level banner); sweep.sh skips its `claude -p` digest while held (raw-facts fallback).
+
+FAST-FOLLOW (ADR-0011 §8): the slack-bridge conversational surface (WR-013 2b — every Steve message
+is a `claude -p --resume` turn) must consume this same hold state. It is a different repo, owner, and
+a UX decision, so it is split to its own work item (see program projects/slack-bridge/) — the shared
+credit-hold file is the contract that item reads.
+
+FOR ERIC (on-host, per definition-of-done; this build claims NO acceptance criterion met):
+  - AC1/AC7: a forced session-limit run sets the hold, does NOT consume the attempt (record ==
+    pre-attempt value), and spawns ZERO `claude -p` on the next N ticks.
+  - AC6: a forced NON-credit failure still clears its record and retries next tick (ADR-0009 intact).
+  - AC2: the hold's expiry equals the reset named in a REAL captured message, resolved in its zone.
+  - AC3: with N>=3 routable at reset, N staggered starts (>= RELEASE_SPACING apart), not one burst.
+  - AC4: doctor.sh names the hold + reset while in force, as an `ok` line that does NOT escalate.
+  - AC5: the board shows the hold distinctly from blocked / hold / idle.
+  - AC8 (sweep half): the daily digest degrades to the raw fact block while held — no spend, no error.
+  - Confirm doctor.sh/sweep.sh can READ steve's MAEGLEY_STATE/credit-hold when they run as todd
+    (both use `sudo -n cat` with a plain-read fallback); if the sudo read is denied, the doctor line
+    is absent and the sweep spends its (cheap, daily) digest — a gap to close, not a spend risk.

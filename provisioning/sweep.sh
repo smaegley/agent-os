@@ -27,6 +27,16 @@ fi
 REPO="${PROGRAM_REPO:-/home/steve/maegley-lab/program}"
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/maegley"
 STATE="$STATE_DIR/sweep-last-sha"
+
+# WR-014/ADR-0011: the shared credit-hold gate. The dispatcher writes it under
+# MAEGLEY_STATE (steve's, 0700); this sweep runs as todd, so read it via sudo with
+# a plain-read fallback. While held, the digest must not spend its `claude -p` call.
+HOLDFILE="${MAEGLEY_STATE:-/home/steve/.local/state/maegley}/credit-hold"
+credit_held() {
+  local reset
+  reset="$( { cat "$HOLDFILE" 2>/dev/null || sudo -n cat "$HOLDFILE" 2>/dev/null; } | head -1 )"
+  [[ "$reset" =~ ^[0-9]+$ ]] && [ "$(date +%s)" -lt "$reset" ]
+}
 BLOCKED_ESCALATE_DAYS=3
 UNASSIGNED_STALE_DAYS=7
 DRY_RUN="${DRY_RUN:-0}"
@@ -110,7 +120,14 @@ if [ -z "$FACTS" ] && [ -z "$ESCALATIONS" ]; then
 fi
 
 # --- digest: model writes prose only, from the facts above -------------------
-DIGEST="$(cd "$REPO" && timeout 120 claude -p --model haiku \
+# While dispatch is held for credit exhaustion, skip the model call and post the
+# raw fact block (the script's existing degradation, ADR-0011 §8, spec §5.8/AC8):
+# no spend, no error — the facts are deterministic and stand on their own.
+if credit_held; then
+  echo "$(date -Iseconds) sweep: credits exhausted (dispatch held) — posting raw facts, no model call" >> "$REPO/log/sweep.log"
+  DIGEST="Credits are exhausted and dispatch is held; digest deferred to raw facts:"$'\n'"$FACTS"
+else
+  DIGEST="$(cd "$REPO" && timeout 120 claude -p --model haiku \
 "Write a Slack digest of at most 4 short lines from the facts below. Report only what
 changed or needs attention — no preamble, no headers, no restating the facts verbatim,
 no invented detail. Reference commits by short hash.
@@ -123,7 +140,8 @@ If a BLOCKED line exists, lead with it; otherwise lead with the most consequenti
 FACTS:
 $FACTS" < /dev/null 2>/dev/null | head -12)"
 
-[ -n "$DIGEST" ] || DIGEST="Sweep ran but the digest step failed. Raw facts:"$'\n'"$FACTS"
+  [ -n "$DIGEST" ] || DIGEST="Sweep ran but the digest step failed. Raw facts:"$'\n'"$FACTS"
+fi
 
 if [ "$DRY_RUN" = "1" ]; then
   echo "=== would post to #program ==="; echo "Daily sweep — $DIGEST"
