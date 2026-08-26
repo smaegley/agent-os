@@ -43,53 +43,74 @@ them.
 
 ## Scheduled
 
-`crontab -l` on codex-ops. **cron here runs in UTC and ignores `CRON_TZ`** (a cronie feature) —
-so the scripts own their own hours in `America/Denver`, DST-aware:
+`crontab -l` on codex-ops. **cron here runs in UTC and ignores `CRON_TZ`** (a cronie feature) — so the
+scripts own their own hours in `America/Denver`, DST-aware:
 
-- `dispatch.sh` every 15 min, acts 07:00–20:00 local, silent outside
-- `sweep.sh` every 10 min, acts ~06:30 local
+- `dispatch.sh` every 15 min, `MAX_DISPATCH=2`, acts 07:00–20:00 local
+- `sweep.sh` every 10 min, acts ~06:30 local — **note it runs `claude -p --model haiku` for its digest**
+- `mirror-record.sh` every 2 min — keeps `/srv/git/program.git` current **from GitHub** (it is a
+  read-only mirror; never push to it — see WR-012 Defect 2)
 - `board.sh` every 2 min, always
+
+**Changed 2026-08-26:** `maegley-dispatch-reconcile.timer` **disabled**, and
+`maegley-token-keepalive.timer` **stopped and set to daily** (Steve's cost ruling). Real dispatchers
+are cron + the watcher — deliberately two, not three; three is what retried into an exhausted credit
+block and spent 5% of the next one 60s after reset (WR-014).
 
 Live board: **http://10.0.1.128:8088/maegley-lab-board.html**
 
 ## Running services
 
 - `slack-bridge` — Socket Mode, unprivileged, fully hardened, holds no Slack credential.
-  **Cannot `sudo` to anything** — `NoNewPrivileges` plus seven settings that each imply it. Two
-  ADRs were written assuming otherwise before this was designed around.
-- `slack-bridge-relay.path` — root side of the reply split; posts as **Maegley Bridge** (ADR-0005)
-- `slack-bridge-intake-runner.path` — root side of the intake split; drains the intake-inbox and
-  runs `intake` via `runuser`, never `sudo` (ADR-0006)
+  **Cannot `sudo` to anything.** Running slack-bridge `00647d5`.
+- `maegley-dispatch-watch` — **CUT OVER 2026-08-26 02:08:56: `DISPATCH_SHADOW=0`, dispatching for
+  real.** §6.11 health gate proven firing on both edges with Slack alerts.
+- `slack-bridge-relay.path` — root side of the reply split; posts as **Maegley Bridge** (ADR-0005).
+  **Deletes each reply after posting; there is no `sent/` archive** — this is why reply evidence needs
+  a human paste.
+- `slack-bridge-intake-runner.path` — intake split (ADR-0006)
+- `slack-bridge-status-runner.path` / `-question-runner.path` — answering (ADR-0007)
+- `slack-bridge-conversation-runner.path` — **conversational Todd, LIVE since 2026-08-25 19:25.**
+  Every non-approval Slack message from Steve is a full `claude -p --resume` turn. **While this is
+  enabled the question path is unreachable, so WR-006 criteria 6/7 are untestable** without
+  temporarily unsetting `CONVERSE_CMD`.
+- `slack-bridge-approve-runner.path` — **ADR-0008 approve path, ENABLED 2026-08-26.** `slack-approve`
+  identity, own GitHub deploy key (write-verified), remote is **GitHub not the local mirror**.
+  **No approval has been released through it yet.**
 - `maegley-board` — serves the board on :8088
-- Proxmox dashboard — VMID 900 `test-pvedash` @ **10.0.1.117:8080** (test env, disposable)
+- Proxmox dashboard — VMID 900 `test-pvedash` @ **10.0.1.117:8080**
 
 ## Work in flight
 
+*As of 2026-08-26 02:30. The pipeline ran unattended through the night of 25→26 for the first time —
+Todd, Eric, Theresa, John and Randal all dispatched, ran, committed and routed without a human.*
+
 | Item | State | Owner | Note |
 |---|---|---|---|
-| WR-001 | `done` | — | HA config mirror live and pushed. QA-verified, all 10 criteria |
+| WR-001 | `done` | — | HA config mirror. QA-verified, all 10 criteria |
 | WR-005 | `done` | — | Slack bridge transport. QA-verified |
+| WR-006 | `blocked` | Steve | **VERIFIED-COMPLETE — awaiting Steve's accept/close.** Eric passed all 14 criteria from committed evidence. Accepting delivered work is the raiser's call |
 | WR-004 | `accepted` | — | Proxmox POC. **Closed as-is by Steve — NOT verified.** Never cite as a QA pass |
 | WR-010 | `cancelled` | — | Recorder boot race. Reviewed and deliberately not done |
 | WR-002 | `hold` | — | LVM thin-pool guard |
 | WR-003 | `hold` | — | ha-triage retarget |
 | WR-007 | `hold` | — | record↔code link; misfiled migraine spec in ha-ops |
-| WR-006 | `needs-exec` | Todd | Routed 2026-08-25. Offline half runnable; six probes still need **Steve's Slack ID** (ADR-0002) and the redeploy is prod-touching — Todd escalates those |
-| WR-009 | `needs-exec` | Todd | Routed 2026-08-25. S1/S2 runnable; S0 liveness `stat`s `/home/steve/...` which agents cannot read **by design** — NOT RUN, not worked around. Cutover held at shadow |
-| WR-011 | `needs-exec` | Todd | Routed 2026-08-25. Steps 2+3 RUN and PASS via dispatch (operator spot-check); Step 1's suite at `1321ce2` still unrun — that is the substance |
-| WR-012 | `blocked` | Steve | **Deliberately not routed.** Stage 2 verifies a **sudo grant**; a no-sudo agent must not run it. Part A is operator-runnable now and settles criteria 2/3/4/5; Part B needs Steve's yes. **Request defect:** §A2/A4/A5/A6 are marked "Todd, unattended" but contain `sudo` |
-| WR-013 | `blocked` | Steve | **Conversational Todd in Slack** — Steve's priority. Row previously read `design-ready`/Randal; the item says `blocked`/`steve`. Seam is BUILT. Its offline unit tests were walled by the same allowlist and are **now runnable**; remaining gates are real — WR-011 approve path enabled, WR-009 §6.11 live, and Steve's yes on the operator deploy |
+| WR-009 | `qa-ready` | Eric | Fix-stage 2 PASS (all 4 scenarios, run as steve). **Cut over 02:08:56 — watcher dispatching for real.** §6.11 proven firing, both Slack edges. Stage-3 criteria still owed to QA |
+| WR-011 | `qa-ready` | Eric | Stage 1 green at `00647d5`, every named test verified individually. Approve path now enabled. Eric writes stage 2 |
+| WR-012 | `qa-ready` | Eric | **6/6 criteria evidenced**, two defects recorded (units-restarted misreport; deploy-event push cannot succeed) |
+| WR-013 | `blocked` | Steve | 2b LIVE, 2c COMPLETE. **Both ADR-0010 ship gates green.** Waiting on criterion-8 Probe B (10:05 UTC) and Eric's stage 2 |
+| WR-014 | `design-ready` | Randal | Credit-aware dispatch — raised, spec'd and ADR'd overnight by Theresa and John |
 
 ## Open decisions for Steve
 
-1. **None outstanding.** Step 9 was ruled 2026-08-21 (*"eric can deploy to prod"*), the LLM egress
-   accepted 2026-08-20, WR-013's scope settled 2026-08-25, the Bash grant 2026-08-25.
-2. **Pending action, not a decision:** WR-006/009/011 are still sitting at `blocked/steve` even
-   though the reason is gone. They need re-routing to their real states — WR-011 to
-   `needs-exec/todd` per Eric's run-request-4. Flipping them fires live dispatches, so it is held
-   for Steve's go.
-3. **`blocked` is still overloaded.** It means "needs Steve", and it absorbed "no agent can run
-   this" for four days without anyone noticing the difference. Worth a distinct state.
+1. **Accept and close WR-006.** Verified-complete by Eric against bars fixed before the evidence
+   existed. The only thing waiting on a human right now.
+2. **Criterion 8 / keep-alive cadence** — after Probe B lands (10:05 UTC). Probe A already showed no
+   renewal on a healthy token; Probe B tests an expired one. Note daily cadence cannot preserve an ~8h
+   token, so a "yes" from Probe B reopens the cadence question.
+3. **Not decisions, carried openly:** the WR-009 cutover shipped with **no stage-3 QA request** — the
+   operator raised it, Steve ruled to proceed, and §6.2/6.6/6.7/6.8/6.9/6.10/6.12 remain owed to Eric
+   against the running system.
 
 ## THE BLOCKER — RESOLVED 2026-08-25. It was a two-entry allowlist, not a wall.
 
@@ -150,6 +171,68 @@ not. That item stays with Steve or the interactive operator for correct reasons,
 inferring a capability wall, without reading the config that produces refusals. One `cat` of
 `settings.json` would have ended it on day one. *Verify the thing that runs* has a twin: **read the
 thing that decides.**
+
+## FOLLOW-UP — why Steve is the integration layer, and what would change it
+
+**Raised 2026-08-26 from Steve's own question, after a session in which the pipeline finally worked
+end to end and he was still hands-on throughout.** Recorded here rather than as a work request because
+nothing new is being started; this is the analysis to design against when the current work closes.
+
+**What one session actually cost him:** ran privileged commands by hand **4 times**, pasted output back
+**6 times**, posted Slack messages **twice**, re-authed **6 agents** through browser flows, registered
+a deploy key **twice** (2FA timed out), answered **3** design questions — and **noticed the credit
+burn himself**, because the system spent 5% of a fresh block and reported nothing. Only the 3 design
+questions were the kind he wants to be asked.
+
+**1. Every boundary was designed to exclude agents; nobody designed the complement.** The credential
+rule — root holds the secret, a wrapper mediates, the agent never sees it — is applied seven times and
+is genuinely good. But it exists only as a **wall**. There is no sanctioned path for privileged work to
+*happen* without Steve's hands, so a boundary does not protect a workflow, it terminates one. Todd is
+the sharpest case: described as "the unattended operator runtime", his defining behaviour is *escalate
+everything prod-touching and stop*. That is a well-documented tripwire, not an operator. On 2026-08-26
+he escalated a redeploy that had already happened, because he cannot read the bridge config that would
+have told him.
+
+**2. There is no such thing as a standing approval.** Steve ruled *"eric can deploy to prod"* on
+2026-08-21. Five days later deploying still required him to approve one SHA with one single-use token.
+The policy decision bought nothing — it moved where the per-instance yes/no is asked. Nothing in the
+system expresses *"this class of action, on these targets, is pre-authorised"*, so approvals never
+batch and their volume grows with throughput instead of shrinking as trust accumulates.
+
+**3. The QA discipline is excellent and the tooling under it cannot support it.** Pre-declared bars,
+verbatim evidence, no substituting inspection for execution — that discipline is why 2026-08-25/26
+surfaced six real defects. But it runs on infrastructure where agents could not execute at all until
+that morning, evidence cannot be captured automatically (the relay deletes every reply it sends —
+that is *why* criterion 6 needed a human paste), and the record spans three git remotes with a
+read-only mirror in the middle. Every verification degrades into a human relay: run, copy, paste.
+
+**4. Nothing is trusted, because too much reports success it has not verified.** The keep-alive logged
+`refreshed 'andrea'` while renewing nothing. The deploy reported 11 units restarted when zero were.
+`doctor` said *"quiet-period expiry mitigated"* about a mechanism measured failing. `git push
+--dry-run` said *"Everything up-to-date"* about a key with no access. When self-reports cannot be
+trusted, everything is re-verified by hand — and the hand is Steve's.
+
+**Also the operator's own share, recorded because it is fixable and was the most repetitive part:** the
+interactive session's classifier refuses nested `sudo -u X sudo …`, `useradd` and `ssh-keygen`. Steve
+was handed those commands **three separate times** instead of the operator asking once for a rule
+covering that shape. The operator also asked where it should have decided (the WR-009 cutover was put
+as a three-option question after Steve had already said "cutover WR-009") and held 2b/2c after they
+were approved, costing a round trip.
+
+**What would change it, roughly in value order:**
+- An **operator-privilege broker** — one wrapper covering the command shapes that keep bouncing off the
+  sandbox, so privileged *verification* stops routing through Steve's keyboard.
+- **Per-agent API keys instead of OAuth.** `AGENT-RUNTIME.md` names this tradeoff and rejects it on
+  billing; it costs six browser logins per outage and is why a quiet weekend kills the org.
+- **An append-only `sent/` archive on the relay.** One write before the delete and criterion-6-style
+  evidence stops needing a human clipboard, permanently.
+- **Standing approvals by class**, so Steve's rulings compound instead of resetting.
+- **A properly scoped `gh` token.** The current one 404s on `smaegley/program` — that is why deploy-key
+  registration is manual and why it took two attempts.
+
+**The through-line:** this program has built excellent *judgment* — the specs, ADRs and pre-declared
+bars are genuinely good — and almost no *reach*. Steve is currently the integration layer between the
+two.
 
 ## What is genuinely not built
 
