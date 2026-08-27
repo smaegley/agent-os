@@ -93,13 +93,14 @@ for f in $ORDERED; do
   id="$(fm id "$f")";    [ -n "$id" ] || continue
   state="$(fm state "$f")"; proj="$(fm project "$f")"
   infra="$(fm infra "$f")"; uf="$(fm user_facing "$f")"; adr="$(fm needs_adr "$f")"
+  owner="$(fm owner "$f")"
 
   # Local sweep: confirm the item is on origin (agents pull from origin).
   origin_ok=1
   git cat-file -e "origin/main:$f" 2>/dev/null || origin_ok=0
 
   evaluate_item "$id" "$proj" "$state" "${infra:-false}" "${uf:-false}" "${adr:-false}" \
-                "$(fm owner "$f")" "$f" "$origin_ok"
+                "$owner" "$f" "$origin_ok"
 
   case "$EV_STATUS" in
     routed)        ROUTED+="  $EV_REASON"$'\n' ;;
@@ -114,6 +115,26 @@ for f in $ORDERED; do
     contradiction) STOPPED+="  $EV_REASON"$'\n'
                    NEEDS_STEVE+="  $id — state '$state' and owner disagree; Todd to resolve"$'\n' ;;
   esac
+
+  # WR-020: the human-waiting states must be announced on EVERY tick they hold —
+  # collected here from CURRENT state, exactly as blocked/unprovisioned are (folded
+  # into NEEDS_STEVE below), NOT once at transition time from the diff loop. The old
+  # code added these in the second, transition-gated loop, so a parked needs-exec/steve
+  # item was mentioned the tick it arrived and then went permanently silent.
+  # An item that route()s to an AGENT is being WORKED, not waiting on a human, and an
+  # empty route() is exactly that test: needs-exec owned by todd/eric routes non-empty
+  # (excluded), a user_facing qa-passed routes to andrea (excluded). token-needed and
+  # uat-passed always route to no agent, so the gate always passes for them.
+  case "$state" in
+    needs-exec|qa-passed|uat-passed|token-needed)
+      if [ -z "$(route "$state" "${infra:-false}" "${uf:-false}" "${adr:-false}" "$owner")" ]; then
+        case "$state" in
+          needs-exec)           NEEDS_STEVE+="  $id — needs-exec: the machine is done, you must act"$'\n' ;;
+          qa-passed|uat-passed) NEEDS_STEVE+="  $id is verified and waiting on your deploy approval"$'\n' ;;
+          token-needed)         NEEDS_STEVE+="  $id — a credential must be created; Todd asks Steve before minting it"$'\n' ;;
+        esac
+      fi ;;
+  esac
 done
 
 # --- report what actually changed on origin — the only honest report of a run.
@@ -124,16 +145,14 @@ for f in projects/*/*.md; do
   now="$(fm state "$f")"; was="${BEFORE[$f]:-}"
   [ "$now" = "$was" ] && continue
   id="$(fm id "$f")"; who="$(fm owner "$f")"
-  if [ "$now" = blocked ]; then
-    NEEDS_STEVE+="  $id blocked — $(fm project "$f")"$'\n'
-  else
-    LANDED+="  $id  $was → $now  (now $who)"$'\n'
-  fi
-  case "$now" in
-    qa-passed|uat-passed) NEEDS_STEVE+="  $id is verified and waiting on your deploy approval"$'\n' ;;
-    needs-exec)           NEEDS_STEVE+="  $id — Todd will execute QA's run request; you will get a plain-language approval ask first if anything touches prod"$'\n' ;;
-    token-needed)         NEEDS_STEVE+="  $id — a credential must be created; Todd asks Steve before minting it"$'\n' ;;
-  esac
+  # WR-020: report only genuine transition news here. The human-waiting standing
+  # states (blocked, needs-exec/steve, qa-passed, uat-passed, token-needed) are now
+  # collected unconditionally in the first loop, so reporting them from this diff is
+  # both redundant and the source of the once-then-silent bug. A transition TO blocked
+  # is not a completion and is already announced every tick from the first loop — keep
+  # it out of the #program COMPLETED summary. Every other transition IS news once.
+  [ "$now" = blocked ] && continue
+  LANDED+="  $id  $was → $now  (now $who)"$'\n'
 done
 
 SUMMARY=""
