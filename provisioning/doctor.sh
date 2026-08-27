@@ -24,6 +24,20 @@ FAIL=0; REPORT=""
 ok()   { printf '  ✓ %-8s %s\n' "$1" "$2"; }
 bad()  { printf '  ✗ %-8s %s\n' "$1" "$2"; REPORT+="  $1: $2"$'\n'; FAIL=1; }
 
+# Time since an identity last had its token ACTUALLY renewed, read from the
+# keep-alive journal (WR-019 Defect 1). This reads only the honest post-Defect-3
+# line — `token-keepalive: refreshed '<agent>' (+Nh)` is logged solely on a real
+# expiresAt advance — so it cannot be fooled by a no-op run. Purely informational:
+# it enriches the ok line and never affects the exit code. Empty if unavailable.
+agent_last_renewal() {
+  local out when
+  out="$(journalctl -u maegley-token-keepalive.service --no-pager -o short-unix 2>/dev/null \
+         || sudo -n journalctl -u maegley-token-keepalive.service --no-pager -o short-unix 2>/dev/null)"
+  when="$(printf '%s\n' "$out" | grep -F "token-keepalive: refreshed '$1'" | tail -1 | awk '{print $1}')"
+  [ -n "$when" ] || return 0
+  echo "$(( ( $(date +%s) - ${when%.*} ) / 3600 ))h ago"
+}
+
 echo "agent org doctor — $(date '+%Y-%m-%d %H:%M')"
 
 SUBSTRATE_HEAD="$(git -C "$MIRROR" rev-parse HEAD 2>/dev/null || echo unknown)"
@@ -31,22 +45,38 @@ SUBSTRATE_HEAD="$(git -C "$MIRROR" rev-parse HEAD 2>/dev/null || echo unknown)"
 
 for a in $(agent_list); do
   # --- identity ------------------------------------------------------------
-  # Existence is not validity. Randal's token expired 2026-08-21 and every
-  # dispatch to him failed 401 while this check happily reported "authenticated"
-  # -- the file was right there. Tokens refresh on use, so an agent that stops
-  # being dispatched for any reason silently ages out and cannot come back
-  # without an interactive login. Compare expiresAt to now; it costs a file read.
+  # Assert on the credential that actually predicts failure — the REFRESH token —
+  # not the disposable access token (WR-019 Defect 1). The access token lives ~8h
+  # and the keep-alive timer is DAILY (Steve's 2026-08-26 cost ruling), so every
+  # identity is EXPECTED to hold an expired access token for most of each day. That
+  # is by design and harmless: as long as the refresh credential is live, the next
+  # keep-alive fire re-mints the access token from it with no interactive login.
+  # What actually ends in a browser login is a MISSING refresh credential (the
+  # 2026-08-22→25 outage killed the fleet by killing the refresh credential through
+  # multi-day silence, NOT by letting access tokens expire). So that is the only
+  # condition this fails loudly on. The prior check alarmed on the expired access
+  # token every single night and advised a re-login that cost six real browser
+  # logins on 2026-08-25 (STATE.md).
   if ! sudo -n test -f "/home/$a/.claude/.credentials.json"; then
     bad "$a" "not authenticated — cannot be dispatched"
   else
+    have_refresh="$(sudo -n grep -oE '"refreshToken":"[^"]+"' "/home/$a/.claude/.credentials.json" 2>/dev/null | head -1)"
     exp="$(sudo -n grep -oE '"expiresAt":[0-9]+' "/home/$a/.claude/.credentials.json" 2>/dev/null | head -1 | cut -d: -f2)"
     now_ms=$(( $(date +%s) * 1000 ))
-    if [ -z "$exp" ]; then
-      ok "$a" "authenticated (no expiry recorded)"
-    elif [ "$exp" -le "$now_ms" ]; then
-      bad "$a" "TOKEN EXPIRED $(( (now_ms - exp) / 3600000 ))h ago — dispatches will 401; needs interactive re-login"
+    if [ -z "$have_refresh" ]; then
+      bad "$a" "REFRESH CREDENTIAL MISSING — token cannot be renewed; needs interactive re-login"
     else
-      ok "$a" "authenticated (expires in $(( (exp - now_ms) / 3600000 ))h)"
+      # Refresh credential present ⇒ healthy. The access-token line below is
+      # observability only; expired-between-fires is normal and stays ok.
+      if [ -z "$exp" ]; then
+        acc="access expiry not recorded"
+      elif [ "$exp" -le "$now_ms" ]; then
+        acc="access token expired $(( (now_ms - exp) / 3600000 ))h ago — expected between keep-alive fires"
+      else
+        acc="access token valid $(( (exp - now_ms) / 3600000 ))h"
+      fi
+      renewed="$(agent_last_renewal "$a")"
+      ok "$a" "refresh credential live${renewed:+, last renewed $renewed}; $acc"
     fi
   fi
 
@@ -64,12 +94,30 @@ for a in $(agent_list); do
   done
 
   # --- substrate currency: stale rules are followed just as confidently ----
+  # Three distinct cases, kept distinct (WR-019 Defect 2). Collapsing "AHEAD of the
+  # mirror" into "stale" via a failed subtraction printed a literal `?` and told the
+  # operator to catch up when the truth was the reverse — an unpublished commit the
+  # mirror had never seen, i.e. the publish gap. The AHEAD branch NAMES that gap and
+  # the action it implies (merge, then publish-substrate.sh), which is the opposite of
+  # what "stale" implies. No `?` can reach a bad line: the count runs only once the
+  # commit is confirmed a known ancestor, so it always yields a real integer.
   if sudo -n test -d "/home/$a/work/agent-os/.git"; then
     h="$(agent_git "$a" agent-os rev-parse HEAD 2>/dev/null)"
-    if [ "$h" = "$SUBSTRATE_HEAD" ]; then ok "$a" "substrate current"
+    if [ -z "$h" ]; then
+      bad "$a" "cannot read agent-os HEAD — clone may be broken"
+    elif [ "$h" = "$SUBSTRATE_HEAD" ]; then
+      ok "$a" "substrate current"
+    elif ! git -C "$MIRROR" cat-file -e "$h" 2>/dev/null; then
+      bad "$a" "substrate AHEAD — unpublished commit ${h:0:7}, needs merge + publish-substrate.sh"
+    elif git -C "$MIRROR" merge-base --is-ancestor "$h" "$SUBSTRATE_HEAD" 2>/dev/null; then
+      n="$(git -C "$MIRROR" rev-list --count "$h..$SUBSTRATE_HEAD" 2>/dev/null)"
+      if [[ "$n" =~ ^[0-9]+$ ]] && [ "$n" -gt 0 ]; then
+        bad "$a" "substrate $n commits stale — running outdated skills"
+      else
+        bad "$a" "substrate behind mirror at ${h:0:7} — running outdated skills"
+      fi
     else
-      n="$(git -C "$MIRROR" rev-list --count "$h"..HEAD 2>/dev/null || echo '?')"
-      bad "$a" "substrate $n commits stale — running outdated skills"
+      bad "$a" "substrate DIVERGED from mirror (agent at ${h:0:7}, mirror at ${SUBSTRATE_HEAD:0:7}) — needs reconcile"
     fi
   else
     bad "$a" "no agent-os clone — has no skills at all"
