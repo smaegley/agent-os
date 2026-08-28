@@ -70,6 +70,21 @@ exec ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \\
 EOF
 sudo -u "$AGENT" chmod 755 "/home/$AGENT/bin/prod"
 
+# --- notify escalation wrapper ----------------------------------------------
+# Same treatment as `prod`, and for the same reason: `notify` needs root (sudoers
+# grants NOPASSWD /usr/local/bin/notify and nothing else), but `Bash(sudo *)` is
+# denied and deny beats allow — so without a fixed wrapper the agent reaches its
+# own granted privilege only by luck of phrasing. Measured (WR-021): Todd
+# delivered once on 2026-08-26 and was denied 3x on each of two dispatches on
+# 2026-08-27, identical settings. A fixed wrapper string, matched by a narrow
+# allow rule, while raw sudo stays denied. Grants nothing new at the OS layer.
+# Quoted heredoc: "$@" is the wrapper's own arg-forwarding, not expanded here.
+sudo -u "$AGENT" tee "/home/$AGENT/bin/notify" >/dev/null <<'WRAP'
+#!/usr/bin/env bash
+exec sudo -n /usr/local/bin/notify "$@"
+WRAP
+sudo -u "$AGENT" chmod 755 "/home/$AGENT/bin/notify"
+
 # --- workspace --------------------------------------------------------------
 sudo -u "$AGENT" install -d -m 755 "/home/$AGENT/work"
 # Project CODE repos, not just the substrate and the record. WR-006 stalled
@@ -144,6 +159,7 @@ s['permissions'] = {
         f"Write(//home/{agent}/work/agent-os/provisioning/**)",
         f"Edit(//home/{agent}/work/agent-os/provisioning/**)",
         f"Bash(/home/{agent}/bin/prod *)",
+        f"Bash(/home/{agent}/bin/notify *)",
         # Not per-subcommand: `git -C <dir> <sub>` does not match `git add *`,
         # and agents working across two repos use -C constantly. Real reach is
         # bounded by filesystem permissions and deploy keys, not by this pattern.
