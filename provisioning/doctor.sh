@@ -339,6 +339,91 @@ fi
 
 echo
 
+# --- WR-023 / ADR-0013: front-matter validation present, consistent, honest ---
+# The write-time hook (validate-frontmatter.sh) catches a bad machine-matched field
+# at commit. doctor is the backstop for a --no-verify bypass or an item committed
+# before the hook existed, AND the ONLY host that can run the anti-drift consistency
+# checks: it lives where lib-dispatch.sh, approve, intent, and the roster co-exist,
+# while the hook fires in an arbitrary clone that may have none of them. ABSENT is
+# fine — the validator is operator-installed substrate (ADR-0013 Handoff); PRESENT
+# is asserted. Every check that cannot run on THIS host degrades to an ok "skipped"
+# line, never a bad one — a cry-wolf backstop gets ignored (secret-scan.sh:21).
+echo
+FMV="$HERE/../plugins/maegley-core/hooks/validate-frontmatter.sh"
+PROGRAM_REC="${MAEGLEY_PROGRAM:-/home/steve/maegley-lab/program}"
+if [ ! -x "$FMV" ]; then
+  ok "frontmatter" "validator not yet installed (ADR-0013 substrate pending operator install)"
+else
+  fmcfg="$("$FMV" --config 2>/dev/null || true)"
+  if [ -z "$fmcfg" ]; then
+    bad "frontmatter" "validator present but --config failed — cannot source lib-dispatch.sh to derive the state enum"
+  else
+    v_owners="$(printf '%s\n' "$fmcfg" | sed -n 's/^OWNERS=//p')"
+
+    # (a) corpus sweep — no bad record already sitting in the tree (crit 6; live
+    #     projects/*/WR-*.md, one level, which excludes archive/ and artifacts/).
+    if [ -d "$PROGRAM_REC/projects" ]; then
+      nf="$("$FMV" --files "$PROGRAM_REC"/projects/*/WR-*.md 2>/dev/null | grep -c 'front-matter:' || true)"
+      if [ "${nf:-0}" -eq 0 ]; then
+        ok "frontmatter" "live corpus clean — every record's machine-matched fields are valid"
+      else
+        bad "frontmatter" "${nf} bad field(s) in the live corpus — run: $FMV --files $PROGRAM_REC/projects/*/WR-*.md"
+      fi
+    else
+      ok "frontmatter" "program corpus not on this host — sweep skipped"
+    fi
+
+    # (b) token regex three-way: validator == approve == slackbridge/intent (ADR-0013 D4).
+    #     Compare the anchor-agnostic regex CORE so \A..\Z / ^..$ / unanchored do not read
+    #     as drift. This folds the flagged approve<->intent duplication into a checked one.
+    _core='WR-\[0-9\]\{[0-9,]+\}-\[A-Za-z0-9\]\{[0-9,]+\}-\[A-Za-z0-9\]\{[0-9,]+\}'
+    APPROVE_BIN="$(command -v approve 2>/dev/null || echo /usr/local/bin/approve)"
+    INTENT_SRC="${MAEGLEY_SLACKBRIDGE:-/home/steve/work/slack-bridge}/slackbridge/intent.py"
+    v_tok="$(grep -oE "$_core" "$FMV"        2>/dev/null | head -1)"
+    a_tok="$(grep -oE "$_core" "$APPROVE_BIN" 2>/dev/null | head -1)"
+    i_tok="$(grep -oE "$_core" "$INTENT_SRC"  2>/dev/null | head -1)"
+    if [ -z "$a_tok" ] || [ -z "$i_tok" ]; then
+      ok "frontmatter" "token-regex cross-check skipped (approve/intent not on this host)"
+    elif [ "$v_tok" = "$a_tok" ] && [ "$a_tok" = "$i_tok" ]; then
+      ok "frontmatter" "token regex agrees: validator == approve == intent"
+    else
+      bad "frontmatter" "token regex DRIFT — validator[$v_tok] approve[$a_tok] intent[$i_tok] disagree"
+    fi
+
+    # (c) owner set == provisioned agents (ADR-0013 D4). Validator OWNERS minus the two
+    #     non-agent literals (steve, unassigned) must equal the roster the machine dispatches to.
+    v_agents="$(printf '%s\n' $v_owners | grep -vxE 'steve|unassigned' | sort -u | tr '\n' ' ' | sed 's/ *$//')"
+    prov="$(agent_list | sort -u | tr '\n' ' ' | sed 's/ *$//')"
+    if [ -z "$prov" ]; then
+      ok "frontmatter" "owner cross-check skipped (roster unreadable on this host)"
+    elif [ "$v_agents" = "$prov" ]; then
+      ok "frontmatter" "owner set == provisioned agents ($prov)"
+    else
+      bad "frontmatter" "owner set DRIFT — validator agents[$v_agents] != provisioned[$prov]"
+    fi
+
+    # (d) AGENTS.md's state table is CHECKED documentation of route(), not a third source
+    #     of truth (ADR-0013 D4). The table is a curated SUBSET, so assert containment: every
+    #     token it documents must be a legal state, else the human doc has drifted from the machine.
+    v_states=" $(printf '%s\n' "$fmcfg" | sed -n 's/^LEGAL_STATES=//p') "
+    ROSTER="${AGENT_OS:-/home/steve/maegley-lab/agent-os}/AGENTS.md"
+    doc_bad=""
+    while IFS= read -r st; do
+      [ -n "$st" ] || continue
+      case "$v_states" in *" $st "*) : ;; *) doc_bad="$doc_bad $st" ;; esac
+    done < <(grep -E '^\| `[a-z-]+` \|' "$ROSTER" 2>/dev/null | sed -E 's/^\| `([a-z-]+)`.*/\1/')
+    if [ ! -r "$ROSTER" ]; then
+      ok "frontmatter" "AGENTS.md state-table cross-check skipped (roster not on this host)"
+    elif [ -z "$doc_bad" ]; then
+      ok "frontmatter" "AGENTS.md state table ⊆ route() — human doc agrees with the machine"
+    else
+      bad "frontmatter" "AGENTS.md documents state(s) route() does not accept:$doc_bad — doc drifted from the machine"
+    fi
+  fi
+fi
+
+echo
+
 # --- loaded-process freshness -----------------------------------------------
 # running==committed is asserted for FILES; a long-running process that loaded an
 # older copy passes every file check while behaving like the old code. That gap
