@@ -1,4 +1,4 @@
-# State of the program — 2026-08-27
+# State of the program — 2026-09-03
 
 Current-state handoff. `ROLLOUT.md` describes the original Phase A–D plan and is now historical;
 **this file is what is true.** Written so a fresh session can pick up from the repos rather than
@@ -6,23 +6,32 @@ from a conversation.
 
 ## START HERE — a fresh session in ten lines
 
-1. **The board is entirely human-gated right now.** Every open item is `blocked`/`steve` or
-   `needs-exec`/`steve`, which is why nothing ran overnight. Nothing is stuck; it is waiting on Steve.
-2. **Agents can execute.** The old "nothing can run" blocker is gone. Dispatch works, the watcher is
-   real, the approve path is live, and the conversational surface answers.
-3. **Read `## THE RECURRING FAILURE CLASSES` before diagnosing anything.** Four shapes explain nearly
-   every defect here, and three of them are still open.
+1. **The board is 7 items and two of them are moving on their own.** On 2026-09-03 it went from 23
+   items and five days of zero dispatches to five agents working unattended. Read `## Work in
+   flight` before anything else.
+2. **Front matter is authoritative; the prose has drifted.** `status.md` files disagree with their
+   own items in several places (`ha-ops/status.md` still calls WR-001 `needs-exec`; it has been
+   `done` since 2026-08-19). Trust `state:` and `owner:` in the item, never a narrative summary —
+   **including this file.**
+3. **Read `## THE RECURRING FAILURE CLASSES` before diagnosing anything.** Five shapes explain
+   nearly every defect here. Three were closed on 2026-09-03; **class 5 is new and is the live one.**
 4. **Verify the thing that runs, and read the thing that decides.** Do not trust a component's own
-   success message — several lie. `git push --dry-run` lies about write access. A published fix may not
-   be *loaded*; an installed file may not be *committed*.
-5. **When a builder's `agent-os` commit exists but QA "cannot read it", it is the publish gap.** Merge
-   it and run `publish-substrate.sh`. Seven instances so far.
-6. **Do not pipe `publish-substrate.sh` to `head`** — SIGPIPE kills it mid-loop and silently leaves the
-   alphabetically-later agents stale. That was an operator-manufactured bug.
-7. **Token "expired" is usually not a problem** — an expired token renews on use. `doctor`'s advice to
-   re-login is wrong.
-8. **Ask Steve only for decisions and things only he can do** (Slack posts from his identity, credential
-   minting, prod approvals). See `## FOLLOW-UP` for why he is currently over-involved.
+   success message. `git push --dry-run` lies about write access. A published fix may not be
+   *loaded*; an installed file may not be *committed*.
+5. **A stalled board is usually a queue problem, not a system problem.** The 2026-09-03 stall was
+   one invalid `state:` value plus two `hold` reasons whose preconditions had been met weeks
+   earlier. `doctor.sh` reported "all invariants hold" throughout — correctly.
+6. **When a builder's `agent-os` commit exists but QA "cannot read it", it is the publish gap.**
+   Merge it and run `publish-substrate.sh`. Seven instances.
+7. **Do not pipe `publish-substrate.sh` to `head`** — SIGPIPE kills it mid-loop and silently leaves
+   the alphabetically-later agents stale.
+8. **Token "expired" is not a problem** — an expired token renews on use. (`doctor`'s old re-login
+   advice was wrong and was fixed by WR-019.)
+9. **Ask Steve only for decisions and things only he can do.** On 2026-09-03 four answers from him
+   — a ruling, a permissions edit, one Slack `approve`, two confirmations — closed five items.
+10. **The operator is not exempt from the QA discipline.** On 2026-09-03 Eric failed an operator-run
+    canary because the operator had repaired the input under test mid-run. He was right. See
+    `## Work in flight` → WR-011.
 
 ## What exists and runs
 
@@ -31,11 +40,16 @@ from a conversation.
 | **agent-os** | `github.com/smaegley/agent-os` (private) | substrate: constitution, roster, skills, hooks, provisioning |
 | **program** | `github.com/smaegley/program` (private) | the record: work items, specs, ADRs, QA evidence |
 | **ha-ops** | `github.com/smaegley/ha-ops` (private) | ops scripts and the HA config mirror's tooling |
+| **homeassistant-config** | `github.com/smaegley/homeassistant-config` | the HA config mirror — **its own repo** at `/home/codex/ha/config`, with its own `.gitignore` allowlist |
 | **proxmox-dashboard** | `/srv/git/proxmox-dashboard.git` (local bare) | greenfield app, disposable by design |
 | **slack-bridge** | `/srv/git/slack-bridge.git` (local bare) | inbound Slack command bridge |
 
 Local bare repos are deliberate: those projects are disposable, so no deploy keys to manage.
-Promote to GitHub if they graduate.
+
+**Note the nesting**: `/home/codex/ha` is the **ops** repo and its `.gitignore` excludes `config/`
+wholesale; `/home/codex/ha/config` is the **mirror**, a separate repo whose `.gitignore` is an
+allowlist (`.storage/*` then `!.storage/lovelace*` etc.). Confusing the two wastes a cycle — it did
+on 2026-09-03.
 
 ## The team
 
@@ -43,225 +57,216 @@ Seven identities, each a Unix user on codex-ops (LXC 301) with its own credentia
 
 | Name | User | Role | Prod reach |
 |---|---|---|---|
-| Todd | `steve`/`root` | Ops + coordinator | full — sole holder of `proxmox_lxc` |
+| Todd | `todd` | **the operator runtime** | no sudo except the `notify` wrapper; escalates every prod-touching step |
 | Theresa | `theresa` | BA | none, by design |
 | John | `john` | Architect | read-only |
 | Ken | `ken` | Hardware / environments | sandbox LXCs 900–949 via `provision-env`; no Proxmox key |
 | Randal | `randal` | Developer | read-only via `dev-readonly.sh` |
-| Eric | `eric` | QA | read-only via `qa-verify.sh` — a **different** key from Randal's |
-| Andrea | `andrea` | UAT | none, by design |
-| *Maegley Bridge* | `slack-bridge` | **service identity, not an agent** | writes two queue dirs; no sudo |
-| *intake* | `intake` | **service identity, not an agent** | holds the `program` deploy key; create-only |
-| *slack-answer* | `slack-answer` | **service identity, not an agent** | read-only record clone; holds the LLM key, never the bridge |
-| *deploy-svc* | `deploy-svc` | **service identity, not an agent** | Eric's bounded deploy runs as this; allowlist + approval-token gated |
-| **Todd** *(runtime)* | `todd` | **the operator runtime** — WR-011 | no sudo; escalates every prod-touching step. **Cannot execute (see THE BLOCKER)** |
+| Eric | `eric` | QA | read-only via `qa-verify.sh`; bounded prod deploy via `deploy-svc` |
+| Andrea | `andrea` | UAT | none, by design — **still never dispatched** |
+| *Maegley Bridge* | `slack-bridge` | service identity | writes two queue dirs; no sudo |
+| *intake* | `intake` | service identity | holds the `program` deploy key; create-only |
+| *slack-answer* | `slack-answer` | service identity | read-only record clone; holds the LLM key |
+| *deploy-svc* | `deploy-svc` | service identity | Eric's bounded deploy runs as this |
+| *slack-approve* | `slack-approve` | service identity | own GitHub deploy key; release-only `approve` |
 
-**Credential rule, applied seven times:** root holds the secret, a wrapper mediates, the agent
-never sees it. Slack bot token, Proxmox API token, prod SSH keys, the authorized Slack identity,
-the bridge's reply path, and the `program` deploy key all follow it. The bridge can read none of
-them.
+**Credential rule, applied throughout:** root holds the secret, a wrapper mediates, the agent never
+sees it.
+
+**Todd's reach, precisely** (WR-021, accepted 2026-09-03): he holds `/home/todd/bin/notify`
+(`exec sudo -n /usr/local/bin/notify "$@"`) in `allow`, and **`Bash(sudo *)` stays in `deny`** — the
+wrapper is sanctioned *because* raw sudo is refused. Verified behaviourally: a raw `sudo` attempt
+from his runtime is refused pre-execution. He holds **no prod SSH key** (`prod wrapper failed` is
+expected).
 
 ## Scheduled
 
-`crontab -l` on codex-ops. **cron here runs in UTC and ignores `CRON_TZ`** (a cronie feature) — so the
-scripts own their own hours in `America/Denver`, DST-aware:
+`crontab -l` on codex-ops. **cron here runs in UTC and ignores `CRON_TZ`** — the scripts own their
+own hours in `America/Denver`, DST-aware:
 
 - `dispatch.sh` every 15 min, `MAX_DISPATCH=2`, acts 07:00–20:00 local
-- `sweep.sh` every 10 min, acts ~06:30 local — **note it runs `claude -p --model haiku` for its digest**
-- `mirror-record.sh` every 2 min — keeps `/srv/git/program.git` current **from GitHub** (it is a
-  read-only mirror; never push to it — see WR-012 Defect 2)
+- `sweep.sh` every 10 min, acts ~06:30 local — runs `claude -p --model haiku` for its digest
+- `mirror-record.sh` every 2 min — keeps `/srv/git/program.git` current **from GitHub**
 - `board.sh` every 2 min, always
 
-**Changed 2026-08-26:** `maegley-dispatch-reconcile.timer` **disabled**, and
-`maegley-token-keepalive.timer` **stopped and set to daily** (Steve's cost ruling). Real dispatchers
-are cron + the watcher — deliberately two, not three; three is what retried into an exhausted credit
-block and spent 5% of the next one 60s after reset (WR-014).
+`maegley-dispatch-reconcile.timer` **disabled**; `maegley-token-keepalive.timer` **daily**.
+**Two real dispatchers — cron + the watcher — and that is now the ruled permanent end state**, not
+an interim step (WR-009 §6.14, Steve's 2026-09-03 ruling; see below).
 
 Live board: **http://10.0.1.128:8088/maegley-lab-board.html**
 
-## Running services — all `active` as of 2026-08-27 13:20
+## Running services — all `active`, verified 2026-09-03
 
-- `slack-bridge` — Socket Mode, unprivileged, holds no Slack credential. Running slack-bridge `00647d5`.
-- `maegley-dispatch-watch` — **real since the 2026-08-26 cutover** (`DISPATCH_SHADOW=0`). §6.11 health
-  gate proven firing on both Slack edges. **Dispatched agents run inside this unit's cgroup**, so any
-  watchdog trip or cgroup-wide signal kills every in-flight agent (`KillMode=process` protects them
-  from a normal restart, not from that).
-- `slack-bridge-conversation-runner.path` — **conversational Todd, live.** Every non-approval Slack
-  message from Steve is a full `claude -p --resume` turn, keyed by a thread→session map.
-  **While `CONVERSE_CMD` is set the question path is unreachable**, so WR-006's criteria 6/7 are not
-  re-testable without temporarily unsetting it.
-- `slack-bridge-approve-runner.path` — **ADR-0008 approve path, enabled 2026-08-26.** `slack-approve`
-  identity with its own GitHub deploy key (write-verified). Exercised live: release, negated-refusal,
-  non-Steve refusal, and anti-replay all proven.
-- `slack-bridge-relay.path` — posts as **Maegley Bridge**. **Deletes each reply after posting; no
-  `sent/` archive**, and it discards `notify`'s output — so a successful delivery is unauditable after
-  the fact and only a `.failed` file marks a failure.
-- `maegley-token-keepalive.timer` — **daily, all seven identities.** Renewal is **expiry-driven, not
-  use-driven** (measured). Tokens therefore sit expired between fires — that is expected and harmless,
-  because **an expired token renews on use**. `doctor`'s *"dispatches will 401; needs interactive
-  re-login"* is **wrong on both halves** and cost six unnecessary logins on 2026-08-25.
-- `maegley-board` — :8088. Proxmox dashboard — VMID 900 @ 10.0.1.117:8080.
+`slack-bridge` · `maegley-dispatch-watch` · `slack-bridge-conversation-runner.path` ·
+`slack-bridge-approve-runner.path` · `slack-bridge-relay.path` · `maegley-token-keepalive.timer` ·
+`maegley-board`. `maegley-dispatch-reconcile.timer` **inactive, deliberately**.
+
+`doctor.sh` reports **all invariants hold** (verified 2026-09-03, after the day's changes).
+
+Two properties worth carrying:
+
+- **Dispatched agents run inside the watcher's cgroup**, so a watchdog trip kills every in-flight
+  agent. `KillMode=process` protects them from a normal restart, not from that.
+- **The relay deletes each reply after posting and discards `notify`'s output.** A successful
+  delivery is unauditable after the fact; only a `.failed` file marks a failure. **Still open.**
 
 ## Work in flight
 
-*2026-08-27 13:20. **Nothing is dispatchable right now** — every open item is `blocked`/`steve` or
-`needs-exec`/`steve`. The board is entirely human-gated, which is why nothing ran overnight.*
+*2026-09-03, end of session. Two items moving unattended; one waits on a build; three are held.*
 
 | Item | State | Owner | Where it actually stands |
 |---|---|---|---|
-| WR-007 | `hold` | — | record↔code link; misfiled migraine spec in ha-ops |
-| **WR-009** | `blocked` | **Steve** | Stage-3 Part A + B1 + A5′ all PASS as steve. **B2's premise was falsified** — a wedged watcher cannot reach the 120s heartbeat branch because `WatchdogSec=1min` + `Restart=always` repairs it in ~56s. §6.11's value is its unit-state branch. Eric owes a verdict on the banked evidence |
-| **WR-011** | `blocked` | **Steve** | Stage 1 green. Scenario A: crit 1/2/4/5/6/7 PASS, crit 3 re-run PASS both halves. **Owed:** criteria 9 + 13 (kill/restart with Steve live) |
-| **WR-012** | `blocked` | **Steve** | 5/6. Defect 1 fixed and confirmed (`units: none`). **Defect 2 re-fix `4a8f1ff` published + installed 2026-08-27** — event filename now carries the consumed token and is written *after* the reset. **Needs: a fresh Part-B token + one no-op run**, then Eric rules crit 1 & 6 |
-| **WR-013** | `needs-exec` | **Steve** | **Part C COMPLETE, 6 of 6 PASS.** Both ADR-0010 ship gates green. Owed: Eric's per-criterion verdict; crit 8's *multi-day* case still unproven |
-| WR-016 | `hold` | — | **agent session continuity.** Held deliberately — raised so the analysis is not lost. The single highest-leverage cost change available |
-| **WR-017** | `needs-exec` | **Steve** | Raised by Todd from Slack: restart photo-album. **Deliberately not executed** — prod tree is dirty (4 uncommitted files on `7dd7a72`) |
-| **WR-018** | `blocked` | **Steve** | HA dashboard for the ESPHome `speaker-switcher`. Todd raised it, Theresa spec'd it. Ken dependency flagged — device not in the record |
-| WR-901 / WR-902 | `accepted` | Steve | Canaries, QA-verified. **Teardown owed** (delete `projects/sandbox/`, truncate `/var/lib/agent-os-canary/canary.log`) |
-| WR-015 | `accepted` | Steve | conversational credit-hold gate, all ACs met on the host |
+| **WR-023** | `spec-ready` | **john** | **The live one.** Front-matter validation. Theresa spec'd it same-day; John owes the ADR. **Blocks WR-011 crit 4.** |
+| **WR-018** | `needs-exec` | **todd** | HA Audio tab on `A_Home`. Built (`ha-ops 3296f96`), QA static half PASS. Owed: live half + the **gated VM 106 apply** → Steve. A50 answered: `media_player.arylic_a50`. |
+| **WR-011** | `blocked` | steve | Crits 10 & 11 **PASS** (first-ever runs, 09-03). Crit 3 **FAIL**, crit 4 execution half **not closed** — both owned by WR-023. |
+| WR-007 | `hold` | — | record↔code link; misfiled migraine spec |
+| WR-016 | `hold` | — | **agent session continuity — the highest-leverage change available.** Release it next. |
+| WR-022 | `hold` | — | photo-album prod tree dirty (4 uncommitted files on `7dd7a72`). **Not re-verified** — first task is to re-confirm. |
 
-**Archived** (`projects/<p>/archive/`, out of the dispatcher and board read path, still readable by
-`approve` and the status/question answer path): WR-004, WR-005, **WR-006**, **WR-014**.
+**Closed 2026-09-03:** WR-002 (9/9) · WR-003 (8/8) · WR-009 (16/16) · WR-021 (6/6) · WR-017
+(cancelled). **Archived** to `projects/<p>/archive/`: WR-004, WR-005, WR-006, WR-009, WR-012,
+WR-013, WR-014, WR-015, WR-017, WR-019, WR-020, WR-021, WR-001, WR-010, WR-003, and canaries
+WR-901/902/904/905/906/907/908/909/910/911. Archived items stay readable by `approve` and
+`answerlib`; they leave the dispatcher and board read path (`projects/*/*.md`, one level).
 
 ## Open decisions for Steve
 
-1. **WR-012 (c):** mint a fresh Part-B approval and run the one no-op deploy. Everything else is
-   provisioned. This is the last gap to 6/6.
-2. **WR-011 criteria 9 + 13:** a live session (kill/restart the dispatcher with Steve present).
-3. **WR-017:** whether to restart photo-album at all, given its dirty prod tree — or fix the tree first.
-4. **WR-018:** Theresa's spec awaits Steve; Ken is needed for the device side.
-5. **WR-016:** release from `hold` when the current items close.
-6. **Canary teardown** for WR-901/WR-902.
+1. **WR-018's VM 106 apply** — Todd will escalate it; prod-touching, stops for a yes.
+2. **WR-016 release from `hold`** — the current items are closing; this is the next thing worth
+   starting, and by this file's own assessment the highest-value one.
+3. **Whether the duplicate A50 integration is cleaned up** (`steve_s_office_arylic_a50_...e380`
+   alongside `media_player.arylic_a50`) — an HA-config question, not a WR-018 one.
 
 ## THE RECURRING FAILURE CLASSES — read this before diagnosing anything
 
-Four shapes account for nearly every defect this program has produced. When something is wrong, check
-these first; the odds strongly favour one of them.
+Five shapes account for nearly every defect this program has produced.
 
 ### 1. A component reports an act it did not perform
 
-The signature failure. Confirmed instances, all 2026-08-25/26:
+The signature failure. **Largely closed 2026-09-03** — `doctor`'s false token advice and
+`token-keepalive`'s phantom "refreshed" line were both fixed by **WR-019** (accepted); `deploy`'s
+"11 units restarted" by `7b3dffa`; Todd's "Ask escalated" with zero notify calls by the crit-3
+loudness fix, **proven live** on three consecutive dispatches (WR-021).
 
-- `token-keepalive.sh` logs `refreshed '<agent>'` on exit 0 **whether or not anything renewed** — Probe
-  A shows it claiming a refresh that provably did not happen. **Still open.**
-- `deploy` reported **11 units restarted** when zero were (`UNITS` populated outside the changed
-  branch). *Fixed — `7b3dffa`, confirmed `units: none`.*
-- `doctor` reported *"quiet-period expiry mitigated"* about a mechanism then measured failing; and
-  reports *"dispatches will 401; needs interactive re-login"*, **wrong on both halves**. **Still open.**
-- Todd logged *"Ask escalated to `#ops-command`"* with **zero notify calls made**. *Fixed — brief now
-  requires confirming delivery; proven live.*
-- `git push --dry-run` reports "Everything up-to-date" against a key with **no write access**. Never
-  trust it: prove write with a throwaway ref. Bit the operator twice.
-- **The relay discards `notify`'s output**, so a successful delivery leaves no log line at all.
-  **Still open** — on the one surface whose purpose is breaking silence.
+**Still open:** the relay discards `notify`'s output, so a successful delivery leaves no log line —
+on the one surface whose purpose is breaking silence. And `git push --dry-run` reports
+"Everything up-to-date" against a key with no write access; never trust it, prove write with a
+throwaway ref.
 
 ### 2. Running ≠ committed ≠ loaded
 
-- Prod ran **four commits behind** on `50c3613` with a live security defect while doctor was all-green,
-  because `deployed-artifacts.tsv` covered the *installers* and not the `slackbridge/` package.
-- The watcher ran **3-day-old code** through the WR-009 cutover, then **pre-WR-014 code** while 44 real
-  credit exhaustions produced no hold — the fix was published 31 minutes after the process started.
-  *Fixed — `publish-substrate.sh` now restarts it; `doctor` asserts loaded-process freshness.*
-- Two published fixes sat **installed nowhere** until B3 caught them.
-- **`/opt/photo-project` prod tree is dirty — 4 uncommitted files on `7dd7a72`.** Found by Todd,
-  unprompted. **Still open, and it is Steve's infrastructure, not the agent org.**
+Prod once ran four commits behind with a live security defect while doctor was all-green. The
+watcher ran pre-WR-014 code while 44 real credit exhaustions produced no hold. *Both fixed —
+`publish-substrate.sh` now restarts the watcher and `doctor` asserts loaded-process freshness.*
 
-### 3. The publish gap — SEVEN instances, every one costing a cycle
+**Still open:** `deployed-artifacts.tsv` covers the installers, not the `slackbridge/` package.
+**And `/opt/photo-project` is dirty** — now tracked as WR-022 rather than living only in this file.
 
-`WR-012 22a3a39` · `WR-013 f4c4521` · `WR-014 7e9dcc0` · `WR-015 f19f986` · `WR-012 7b3dffa` ·
-`WR-011 edc3535` · `WR-012 4a8f1ff`.
+### 3. The publish gap — SEVEN instances
 
-**Builders can commit to `agent-os` but cannot publish**; `/opt/agent-os.git` is steve-owned. So every
-agent-os build stalls until an operator merges and runs `publish-substrate.sh`, and QA cannot even read
-it in the meantime. It bounces `design-ready → qa-ready → blocked → qa-ready` each time. On 2026-08-26
-it blocked a **one-line doc fix**, live on the conversational surface, in front of Steve.
+Builders can commit to `agent-os` but cannot publish; `/opt/agent-os.git` is steve-owned. Every
+agent-os build stalls until an operator merges and runs `publish-substrate.sh`.
 
 ### 4. Stale reads — an agent acts on a snapshot the record has moved past
 
-Three on 2026-08-26 alone: Eric re-issued a B2 scenario already run 3 minutes earlier; Todd escalated a
-WR-006 redeploy already completed; Eric wrote *"no new execution evidence exists"* minutes before the
-run produced it, forcing a merge conflict. **This is WR-016's cold-start problem** — a dispatch reads
-at start and the record moves under it.
+This is WR-016's cold-start problem: a dispatch reads at start and the record moves under it.
+**Mitigation in force:** do not edit an item that is queued or running. On 2026-09-03 the operator
+deliberately declined to reorder WR-018 for exactly this reason.
 
----
+### 5. **The record accepts a value the machine cannot act on — NEW, and the live one**
 
-## FOLLOW-UP — why Steve is the integration layer, and what would change it
+**Three instances in eight days**, all silent, all surfacing only at the moment of use:
 
-**Raised 2026-08-26 from Steve's own question, after a session in which the pipeline finally worked
-end to end and he was still hands-on throughout.** Recorded here rather than as a work request because
-nothing new is being started; this is the analysis to design against when the current work closes.
+| Item | Field | Written | Required | Cost |
+|---|---|---|---|---|
+| WR-908 | `pending_ask_state` | `awaiting-approval` | `pending` | token could never bind |
+| WR-018 | `state` | `spec` | a routing-table token | **item dead 5 days** |
+| WR-909 | `pending_ask_token` | bare nonce | `WR-<id>-<step>-<nonce>` | ask unapprovable; **blocks WR-011** |
 
-**What one session actually cost him:** ran privileged commands by hand **4 times**, pasted output back
-**6 times**, posted Slack messages **twice**, re-authed **6 agents** through browser flows, registered
-a deploy key **twice** (2FA timed out), answered **3** design questions — and **noticed the credit
-burn himself**, because the system spent 5% of a fresh block and reported nothing. Only the 3 design
-questions were the kind he wants to be asked.
+**Instance 2 was written by Steve, 1 and 3 by Todd** — so this is not agent discipline and no brief
+rewrite fixes it. Todd's brief carries the token format *with a worked example* and he still got it
+wrong. **Every validation target already exists**: `route()`'s enum, the regex written down at
+`approve:80`, `_find_pending`'s triple. **This is WR-023.**
 
-**1. Every boundary was designed to exclude agents; nobody designed the complement.** The credential
-rule — root holds the secret, a wrapper mediates, the agent never sees it — is applied seven times and
-is genuinely good. But it exists only as a **wall**. There is no sanctioned path for privileged work to
-*happen* without Steve's hands, so a boundary does not protect a workflow, it terminates one. Todd is
-the sharpest case: described as "the unattended operator runtime", his defining behaviour is *escalate
-everything prod-touching and stop*. That is a well-documented tripwire, not an operator. On 2026-08-26
-he escalated a redeploy that had already happened, because he cannot read the bridge config that would
-have told him.
+## FOLLOW-UP — why Steve is the integration layer, and what changed
 
-**2. There is no such thing as a standing approval.** Steve ruled *"eric can deploy to prod"* on
-2026-08-21. Five days later deploying still required him to approve one SHA with one single-use token.
-The policy decision bought nothing — it moved where the per-instance yes/no is asked. Nothing in the
-system expresses *"this class of action, on these targets, is pre-authorised"*, so approvals never
-batch and their volume grows with throughput instead of shrinking as trust accumulates.
+The 2026-08-26 analysis stands and is worth re-reading in full in git history. Its four findings —
+boundaries designed only to exclude, no standing approvals, QA discipline outrunning its tooling,
+and nothing trusted because too much reports unverified success — remain the right frame.
 
-**3. The QA discipline is excellent and the tooling under it cannot support it.** Pre-declared bars,
-verbatim evidence, no substituting inspection for execution — that discipline is why 2026-08-25/26
-surfaced six real defects. But it runs on infrastructure where agents could not execute at all until
-that morning, evidence cannot be captured automatically (the relay deletes every reply it sends —
-that is *why* criterion 6 needed a human paste), and the record spans three git remotes with a
-read-only mirror in the middle. Every verification degrades into a human relay: run, copy, paste.
+**What 2026-09-03 changed, measured:** Steve gave **four inputs** (a cutover ruling, a permissions
+edit, one Slack `approve`, two confirmations) and **five items closed**. That is the intended shape
+and it worked. The remaining friction was concentrated in one place:
 
-**4. Nothing is trusted, because too much reports success it has not verified.** The keep-alive logged
-`refreshed 'andrea'` while renewing nothing. The deploy reported 11 units restarted when zero were.
-`doctor` said *"quiet-period expiry mitigated"* about a mechanism measured failing. `git push
---dry-run` said *"Everything up-to-date"* about a key with no access. When self-reports cannot be
-trusted, everything is re-verified by hand — and the hand is Steve's.
+**The operator-privilege broker is still the top-value unbuilt thing, and it now has a concrete
+instance.** Three non-destructive QA verification steps bounced off the interactive session's
+classifier (`sudo -u todd bash -lc …`, root `journalctl`, `auth.log`). The fix was a five-line
+permissions edit **only Steve could make** — the classifier correctly refuses to let the session
+widen its own permissions, the same boundary that stops an agent editing
+`provision-agent-runtime.sh`. The boundary is right; the absence of a sanctioned path around it is
+what costs time.
 
-**Also the operator's own share, recorded because it is fixable and was the most repetitive part:** the
-interactive session's classifier refuses nested `sudo -u X sudo …`, `useradd` and `ssh-keygen`. Steve
-was handed those commands **three separate times** instead of the operator asking once for a rule
-covering that shape. The operator also asked where it should have decided (the WR-009 cutover was put
-as a three-option question after Steve had already said "cutover WR-009") and held 2b/2c after they
-were approved, costing a round trip.
-
-**What would change it, roughly in value order:**
-- An **operator-privilege broker** — one wrapper covering the command shapes that keep bouncing off the
-  sandbox, so privileged *verification* stops routing through Steve's keyboard.
-- **Per-agent API keys instead of OAuth.** `AGENT-RUNTIME.md` names this tradeoff and rejects it on
-  billing; it costs six browser logins per outage and is why a quiet weekend kills the org.
-- **An append-only `sent/` archive on the relay.** One write before the delete and criterion-6-style
-  evidence stops needing a human clipboard, permanently.
-- **Standing approvals by class**, so Steve's rulings compound instead of resetting.
-- **A properly scoped `gh` token.** The current one 404s on `smaegley/program` — that is why deploy-key
-  registration is manual and why it took two attempts.
-
-**The through-line:** this program has built excellent *judgment* — the specs, ADRs and pre-declared
-bars are genuinely good — and almost no *reach*. Steve is currently the integration layer between the
-two.
+**Also still true:** per-agent API keys instead of OAuth; an append-only `sent/` archive on the
+relay; standing approvals by class; a properly scoped `gh` token.
 
 ## What is genuinely not built
 
-- **Agent session continuity** — WR-016, on `hold`. Every dispatch is a cold start: no `--resume`, and
-  the prompt says *"Read the item in full"*. `eric` has 115 discarded session transcripts, `todd` 31.
-  Eric re-read WR-011 (1,394 lines) five times. **The mechanism already exists** —
-  `conversation-runner` maps thread→session and resumes; dispatch just does not use it.
-- **Andrea (UAT)** — provisioned and authenticated but never dispatched; nothing routes to her.
+- **Agent session continuity** — WR-016, on `hold`. Every dispatch is a cold start. **The mechanism
+  already exists** (`conversation-runner` maps thread→session and resumes); dispatch does not use it.
+- **Front-matter validation** — WR-023, in flight. Failure class 5.
+- **Andrea (UAT)** — provisioned, authenticated, **never dispatched**; nothing routes to her.
 - **A `sent/` archive on the relay** — no host-side record of what the bridge said to Steve.
-- **`deployed-artifacts.tsv` coverage of the `slackbridge/` package** — still installers only.
-- **Anti-starvation in the dispatcher** — priority-ordered with a per-tick cap and **no aging**, so a
-  low-priority item behind churning high-priority ones waits indefinitely. WR-901 sat 2h+ until its
-  priority was raised by hand. Churn is rewarded with dispatch slots.
-- **A fix for the secret-scanner false positives** — it flags *sudoers paths* (`/usr/local/bin/deploy`,
-  `notify`) as credentials, 5–9 hits per WR-012 commit. **It becomes blocking in Wave 1**, at which
-  point the item documenting the sudo grant becomes unpushable.
+- **Anti-starvation in the dispatcher** — priority-ordered, per-tick cap, **no aging**. A low-priority
+  item behind churning high-priority ones waits indefinitely.
+- **A fix for the secret-scanner false positives** — it flags *sudoers paths* as credentials.
+  Demonstrated live on 2026-09-03 pushing WR-021. **It becomes blocking in Wave 1, at which point
+  the item documenting the sudo grant becomes unpushable.**
+- **An undelivered-ask recovery path** — when `notify` fails, Todd correctly refuses to claim
+  escalation and the item sits `blocked`/`todd`, which `approve` correctly refuses to release. Two
+  correct behaviours composing into a deadlock. John's, per ADR-0008.
+- **An executor for an approved prod step** — `approve` releases and re-dispatches Todd, whose brief
+  (spec §2 / criterion 7) forbids executing a prod-touching step while spec §5 says he resumes the
+  approved one. ADR-0008 records the tension as unresolved and out of its scope. **It sits directly
+  across the Slack-to-done goal.**
+
+## 2026-08-27 → 2026-09-03 — what changed
+
+**The board went from 23 items and five days of zero dispatches to 7 items and five agents working
+unattended.** Nothing was wrong with the machinery — `doctor.sh` said "all invariants hold" before
+anything was touched. **Two queue defects caused the whole stall:**
+
+1. **WR-018 carried `state: spec`, which is not in the state machine.** Steve had cleared its
+   blocker and answered every shaping question on 08-29; the router returned
+   `STOP:unknown … NOT A KNOWN STATE`, so Theresa was never dispatched and his answers sat unread
+   for five days. It was **not silent** — `dispatch.sh:113` put it in the "Needs you:" digest every
+   tick — but the digest carried ~10 lines, five of them throwaway canaries, four times an hour.
+   **The signal was buried, which is worse than absent.**
+2. **WR-002 and WR-003 were parked on `hold` with expired reasons** (`behind WR-005 and WR-006` —
+   both long closed), and WR-002's design blocker had been cleared by ADR-0005 on 08-17. Both had
+   finished builds sitting in `ha-ops`.
+
+**Closed:** WR-009 (16/16 — Steve ruled §6.14 *stay parallel-with-cron*, making the current
+two-dispatcher config the **permanent end state**, not an interim one; F2 is accepted by that
+ruling, not resolved) · WR-021 (6/6, clearing WR-011's last precondition) · WR-003 (8/8 — a dead
+host now exits non-zero, names the host and **writes no bundle**) · WR-002 (9/9 — thin-pool guard
+live on NUC1B, 15-min timer, D2 ceiling **measured** at ≈325.49 GiB / ≈2.21×, reproducing
+ADR-0005's withdrawn figure to 0.01 GiB) · WR-017 cancelled, its real finding promoted to WR-022.
+
+**WR-011 progressed but did not close.** Criteria 10 and 11 were **run for the first time ever** and
+both PASS: Todd refused a human-only-class step with an attributed stall naming the class, and
+treated an *unmarked* step as escalate-only rather than assuming it was safe. Criterion 3 **FAILED**
+on a malformed token, and criterion 4's execution half is **not closed** —
+
+**and the reason is the lesson of the day.** The operator repaired Todd's malformed front matter
+mid-run so the approval could bind, calling it "setup, not measurement". Eric ruled **FAIL**:
+*"In unattended production the malformed ask would have stalled at Steve forever and the step would
+never have executed."* He reconstructed the timeline from commits, unprompted, and was right — the
+repair substituted operator-supplied data for the input under test. **The QA discipline works
+against the operator too, and did.**
+
+**Also this session:** `journalctl` was found **blind to agent sudo entirely** — 35,716 entries since
+08-25, all `steve`, zero `todd`, while the same invocations sit in `auth.log` (agent lines log
+without a PID). Any audit built on the journal would silently miss every agent action.
 
 ## 2026-08-25 → 27 — what changed
 
