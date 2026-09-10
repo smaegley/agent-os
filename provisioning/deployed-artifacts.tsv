@@ -48,3 +48,4 @@
 /usr/local/sbin/slack-bridge-approve-runner	slack-bridge	deploy/slack-bridge-approve-runner
 /etc/systemd/system/slack-bridge-approve-runner.path	slack-bridge	systemd/slack-bridge-approve-runner.path
 /etc/systemd/system/slack-bridge-approve-runner.service	slack-bridge	systemd/slack-bridge-approve-runner.service
+/opt/slack-bridge/slackbridge/intent.py	slack-bridge	slackbridge/intent.py
