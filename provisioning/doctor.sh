@@ -444,6 +444,108 @@ if systemctl is-active --quiet "$_wu" 2>/dev/null; then
   fi
 fi
 
+# --- WR-026 / ADR-0014: seat↔repo coverage — a seat can REACH every repo it may
+# be dispatched work in ------------------------------------------------------
+# Three times in eight days an agent was routed work in a repo its seat could not
+# reach (WR-018/Todd/ha-ops, WR-011/Andrea, WR-025/John/slack-bridge); each declined
+# correctly and each cost a round trip, WR-025 sitting inert two days. The loop that
+# clones project repos into every seat (provision-agent-runtime.sh) cannot catch this:
+# it globs /srv/git, so it STRUCTURALLY cannot clone ha-ops (Cause A), and it fires
+# only at provision time, so seats predating a repo were never backfilled (Cause B).
+# This is the missing invariant — per seat, which repos the org may dispatch it into
+# vs. which it HOLDS AND CAN FETCH.
+#
+# Coverage is DERIVED, never a declared per-seat table (ADR-0014 D1; ADR-0013 D4,
+# "read the authoritative source, do not copy it"). The required set is the two
+# universals (agent-os = skills, program = the record) plus every real project repo:
+# the local bares under /srv/git — the exact set the provisioning loop clones — plus
+# ha-ops, the one real repo Cause A keeps OUT of /srv/git, named here because it must
+# be (the loop must name it too to ever clone it) and because ADR-0014 requires its
+# gap be visible. This is cross-checked against the live record corpus so a newly
+# active project cannot slip coverage; a spec-only project has no repo and so requires
+# nothing (you cannot clone what does not exist).
+#
+# "Reach" == a WORKING clone: the real origin must answer, proven by ls-remote against
+# origin, NEVER a dry-run (a dry-run reports "up-to-date" against a key with no access
+# — STATE.md). Per required repo a seat is held-and-fetchable (the only state that is
+# coverage), held-but-not-fetchable (a distinct fault), or absent (a fault). A repo a
+# seat holds but is NOT required for is not reported — over-holding is not this drift
+# (ADR-0014 spec Behavior 4).
+#
+# REPORT, do not gate (ADR-0014 D3): a gap is a loud `bad` that flips the exit code so
+# the daily sweep escalates it — but route() is untouched; items still route and the
+# agent still blocks-and-names, exactly as today. ha-ops is DETECTED here but its
+# backfill is deferred to the separate transport ADR (D2: its only reach is a
+# read-write key, and minting one would grant write to read-only seats), so a missing
+# ha-ops is an EXPECTED standing red until that ADR lands — the line says so rather
+# than hiding it. Anything this host cannot evaluate (no record corpus) degrades to an
+# ok "skipped" line, never a false pass (the backstop discipline, secret-scan.sh:21).
+echo
+PROGRAM_REC="${MAEGLEY_PROGRAM:-/home/steve/maegley-lab/program}"
+COV_FETCH_TIMEOUT="${COV_FETCH_TIMEOUT:-20}"
+# Fetchable == the agent's own origin answers ls-remote within the timeout, run the
+# same privileged way as lib-agent.sh's agent_git (sudo -n -u <agent> git -C <clone>),
+# never a bare path test across the 0750 boundary. The bounded timeout means a slow or
+# dead remote degrades to not-fetchable rather than hanging the sweep (ADR-0014
+# Consequences).
+cov_fetchable() {
+  timeout "$COV_FETCH_TIMEOUT" sudo -n -u "$1" git -C "/home/$1/work/$2" ls-remote origin >/dev/null 2>&1
+}
+# Required repo set: the two universals, plus every local bare (= what the provisioning
+# loop clones), plus ha-ops (Cause A's external repo).
+declare -A COV_REQ=( [agent-os]=1 [program]=1 [ha-ops]=1 )
+for bare in /srv/git/*.git; do
+  [ -d "$bare" ] && COV_REQ["$(basename "$bare" .git)"]=1
+done
+# Cross-check against the live corpus: every project with a tracked item not yet closed
+# (accepted|cancelled|done — everything else, incl. hold/blocked/needs-exec, is still
+# in flight and will need its repo again) must have its repo in the required set. Direct
+# children only — projects/*/*.md excludes projects/*/archive/*.md. A missing mapping
+# (an active project whose repo we do not require) is a real hole; in practice the
+# /srv/git + ha-ops set already covers every real repo, so this confirms rather than
+# adds — but it confirms from the same source the dispatcher reads, so the required set
+# and the live pipeline cannot silently diverge.
+cov_uncovered=""
+if [ -d "$PROGRAM_REC/projects" ]; then
+  for f in "$PROGRAM_REC"/projects/*/*.md; do
+    [ -f "$f" ] || continue
+    st="$(sed -n 's/^state:[[:space:]]*\([a-z-]\{1,\}\).*/\1/p' "$f" | head -1)"
+    [ -n "$st" ] || continue
+    case "$st" in accepted|cancelled|done) continue ;; esac
+    p="$(basename "$(dirname "$f")")"
+    # An active project maps to a repo iff one physically exists for it: a local bare,
+    # ha-ops, or the two universals. Spec-only projects map to nothing.
+    if [ -d "/srv/git/$p.git" ] || [ "$p" = ha-ops ] || [ "$p" = agent-os ] || [ "$p" = program ]; then
+      [ -n "${COV_REQ[$p]:-}" ] || cov_uncovered="$cov_uncovered $p"
+    fi
+  done
+  if [ -n "$cov_uncovered" ]; then
+    bad "coverage" "active project(s) with a repo missing from the required set:$cov_uncovered — derivation out of step with the corpus"
+  fi
+else
+  ok "coverage" "record corpus not on this host — corpus cross-check skipped"
+fi
+req_list="$(printf '%s\n' "${!COV_REQ[@]}" | sort | tr '\n' ' ')"
+ok "coverage" "required repo set (agent-os + program + real project repos): ${req_list% }"
+# Per seat, classify each required repo. Only held-and-fetchable is coverage.
+for a in $(agent_list); do
+  for r in $(printf '%s\n' "${!COV_REQ[@]}" | sort); do
+    if ! sudo -n test -d "/home/$a/work/$r/.git" 2>/dev/null; then
+      if [ "$r" = ha-ops ]; then
+        bad "$a" "ABSENT ha-ops — required but not held; EXPECTED until the ha-ops transport ADR lands (ADR-0014 D2: detection ships now, read-only backfill deferred)"
+      else
+        bad "$a" "ABSENT $r — required but no clone in this seat (re-run provision-agent-runtime.sh $a to backfill; read-only from /srv/git)"
+      fi
+    elif cov_fetchable "$a" "$r"; then
+      ok "$a" "reaches $r (held; origin fetches)"
+    else
+      bad "$a" "$r HELD BUT UNFETCHABLE — clone present but its origin will not fetch; not coverage (a dry-run would have lied up-to-date — STATE.md)"
+    fi
+  done
+done
+
+echo
+
 if [ "$FAIL" = 0 ]; then
   echo "all invariants hold"
 else
